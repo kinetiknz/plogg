@@ -10,6 +10,11 @@
 #include <theora/theoradec.h>
 #include <vorbis/codec.h>
 #include <SDL/SDL.h>
+// For OpenGL support.
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <GLES2/gl2.h>
+#include <EGL/egl.h>
 
 extern "C" {
 #include <sydney_audio.h>
@@ -29,7 +34,7 @@ class TheoraDecode {
 public:
   th_info mInfo;
   th_comment mComment;
-  th_setup_info *mSetup;
+  th_setup_info* mSetup;
   th_dec_ctx* mCtx;
 
 public:
@@ -121,12 +126,283 @@ void VorbisDecode::initForData(OggStream* stream) {
 
 typedef map<int, OggStream*> StreamMap; 
 
+struct DisplaySink
+{
+  virtual void Show(th_ycbcr_buffer const& buffer) = 0;
+};
+
+class SDL_DisplaySink : public DisplaySink
+{
+public:
+  SDL_DisplaySink() : mSurface(0), mOverlay(0) {
+    int r = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE);
+    assert(r == 0);
+  }
+
+
+  void Show(th_ycbcr_buffer const& buffer) {
+    if (!mSurface) {
+      mSurface = SDL_SetVideoMode(buffer[0].width,
+				  buffer[0].height,
+				  32,
+				  SDL_SWSURFACE);
+      assert(mSurface);
+
+      mOverlay = SDL_CreateYUVOverlay(buffer[0].width,
+				      buffer[0].height,
+				      SDL_YV12_OVERLAY,
+				      mSurface);
+      assert(mOverlay);
+    }
+
+    SDL_Rect rect;
+    rect.x = 0;
+    rect.y = 0;
+    rect.w = buffer[0].width;
+    rect.h = buffer[0].height;
+    SDL_LockYUVOverlay(mOverlay);
+
+    for (int i = 0; i < buffer[0].height; ++i)
+      memcpy(mOverlay->pixels[0]+(mOverlay->pitches[0]*i), 
+	     buffer[0].data+(buffer[0].stride*i), 
+	     mOverlay->pitches[0]);
+    
+    for (int i = 0; i < buffer[2].height; ++i)
+      memcpy(mOverlay->pixels[2]+(mOverlay->pitches[2]*i), 
+	     buffer[1].data+(buffer[1].stride*i), 
+	     mOverlay->pitches[2]);
+    
+    for (int i = 0; i < buffer[1].height; ++i)
+      memcpy(mOverlay->pixels[1]+(mOverlay->pitches[1]*i), 
+	     buffer[2].data+(buffer[2].stride*i), 
+	     mOverlay->pitches[1]);
+
+    SDL_UnlockYUVOverlay(mOverlay);
+    SDL_DisplayYUVOverlay(mOverlay, &rect);
+  }
+
+  virtual ~SDL_DisplaySink() {
+    if (mSurface) {
+      SDL_FreeYUVOverlay(mOverlay);
+      SDL_FreeSurface(mSurface);
+    }
+    SDL_Quit();
+  }
+
+private:
+  SDL_Surface* mSurface;
+  SDL_Overlay* mOverlay;
+};
+
+class GL_DisplaySink : public DisplaySink
+{
+public:
+  GL_DisplaySink() : mDisplay(0), mContext(0), mSurface(0) {
+  }
+
+  void Show(th_ycbcr_buffer const& buffer) {
+    if (!mDisplay) {
+      /*
+       * Create a Window in 100 easy steps.
+       */
+      Display* xdpy = XOpenDisplay(NULL);
+      assert(xdpy);
+
+      int screen = XDefaultScreen(xdpy);
+      Window root = RootWindow(xdpy, screen);
+      int depth = DefaultDepth(xdpy, screen);
+
+      XVisualInfo visual;
+      XMatchVisualInfo(xdpy, screen, depth, TrueColor, &visual);
+
+      Colormap cmap = XCreateColormap(xdpy, root, visual.visual, AllocNone);
+
+      XSetWindowAttributes xswa;
+      xswa.colormap = cmap;
+      xswa.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask |
+	ButtonReleaseMask | KeyPressMask | KeyReleaseMask;
+
+      unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap;
+
+      Window xwin = XCreateWindow(xdpy, root, 0, 0,
+				  buffer[0].width, buffer[0].height, 0,
+				  CopyFromParent, InputOutput,
+				  CopyFromParent, mask, &xswa);
+      assert(xwin);
+
+      XMapWindow(xdpy, xwin);
+      XFlush(xdpy);
+
+      /*
+       * Initialize OpenGL ES 2.0 via EGL.
+       */
+      EGLDisplay dpy = eglGetDisplay((NativeDisplayType) xdpy);
+
+      if (eglInitialize(dpy, NULL, NULL) != EGL_TRUE)
+	assert(false);
+
+      EGLint attrs[] = {
+	EGL_BUFFER_SIZE, 16,
+	EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER,
+	EGL_DEPTH_SIZE, 16,
+	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+	EGL_NONE
+      };
+      EGLConfig cfg;
+      EGLint n_cfgs;
+      if (eglChooseConfig(dpy, attrs, &cfg, 1, &n_cfgs) != EGL_TRUE)
+	assert(false);
+
+      EGLSurface srf = eglCreateWindowSurface(dpy, cfg,
+					      (NativeWindowType) xwin, NULL);
+      if (srf == EGL_NO_SURFACE)
+	assert(false);
+
+      eglBindAPI(EGL_OPENGL_ES_API);
+
+      EGLint ctxattrs[] = {
+	EGL_CONTEXT_CLIENT_VERSION, 2,
+	EGL_NONE
+      };
+      EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxattrs);
+      if (ctx == EGL_NO_CONTEXT)
+	assert(false);
+
+      if (eglMakeCurrent(dpy, srf, srf, ctx) != EGL_TRUE)
+	assert(false);
+
+      char const* vshader =
+	"attribute vec4 myVertex;\n"
+	"attribute vec4 myUV;\n"
+	"uniform mat4 myPMVMatrix;\n"
+	"varying vec2 myTexCoord;\n"
+	"void main()\n"
+	"{\n"
+	"gl_Position = myPMVMatrix * myVertex;\n"
+	"myTexCoord = myUV.st;\n"
+	"}\n";
+      mVertexShader = glCreateShader(GL_VERTEX_SHADER);
+      assert(mVertexShader);
+      glShaderSource(mVertexShader, 1, &vshader, NULL);
+      glCompileShader(mVertexShader);
+      GLint compiled;
+      glGetShaderiv(mVertexShader, GL_COMPILE_STATUS, &compiled);
+      assert(compiled);
+
+      char const* fshader =
+	"uniform sampler2D sampler2d;\n"
+	"varying mediump vec2 myTexCoord;\n"
+	"void main()\n"
+	"{\n"
+	"gl_FragColor = texture2D(sampler2d, myTexCoord);\n"
+	"}\n";
+      mFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+      assert(mFragmentShader);
+      glShaderSource(mFragmentShader, 1, &fshader, NULL);
+      glCompileShader(mFragmentShader);
+      glGetShaderiv(mFragmentShader, GL_COMPILE_STATUS, &compiled);
+      assert(compiled);
+
+      mProgram = glCreateProgram();
+      assert(mProgram);
+      glAttachShader(mProgram, mVertexShader);
+      glAttachShader(mProgram, mFragmentShader);
+      glBindAttribLocation(mProgram, 0, "myVertex");
+      glBindAttribLocation(mProgram, 1, "myUV");
+      glLinkProgram(mProgram);
+      glGetProgramiv(mProgram, GL_LINK_STATUS, &compiled);
+      assert(compiled);
+
+      glUseProgram(mProgram);
+      glUniform1i(glGetUniformLocation(mProgram, "sampler2d"), 0);
+      glClearColor(0.6, 0.8, 1.0, 1.0);
+      glGenTextures(1, &mTexture);
+      assert(mTexture);
+      glBindTexture(GL_TEXTURE_2D, mTexture);
+
+      mDisplay = dpy;
+      mContext = ctx;
+      mSurface = srf;
+    }
+
+    unsigned int* rgb = new unsigned int[buffer[0].width * buffer[0].height];
+    for (int i = 0; i < buffer[0].height; ++i) {
+      for (int j = 0; j < buffer[0].width; ++j) {
+	unsigned int v = buffer[0].data[i * buffer[0].stride + j];
+	unsigned int c = (v << 24) + (v << 16) + (v << 8) + 0;
+	rgb[(buffer[0].height - i) * buffer[0].width + j] = c;
+      }
+    }
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, buffer[0].width, buffer[0].height,
+		 0, GL_RGBA, GL_UNSIGNED_BYTE, rgb);
+    delete [] rgb;
+
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    GLint loc = glGetUniformLocation(mProgram, "myPMVMatrix");
+    GLfloat const identity[] = {
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0
+    };
+    glUniformMatrix4fv(loc, 1, GL_FALSE, identity);
+
+    glEnableVertexAttribArray(0);
+    GLfloat const vertices[] = {
+      -1.0, -1.0, 0.0,
+      1.0, -1.0, 0.0,
+      -1.0, 1.0, 0.0,
+      1.0, 1.0, 0.0
+    };
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, vertices);
+
+    glEnableVertexAttribArray(1);
+    GLfloat const coords[] = {
+      0.0, 0.0,
+      1.0, 0.0,
+      0.0, 1.0,
+      1.0, 1.0
+    };
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, coords);
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    eglSwapBuffers(mDisplay, mSurface);
+  }
+
+  virtual ~GL_DisplaySink() {
+    if (mDisplay) {
+      glDeleteProgram(mProgram);
+      glDeleteShader(mVertexShader);
+      glDeleteShader(mFragmentShader);
+
+      eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+      eglDestroySurface(mDisplay, mSurface);
+      eglDestroyContext(mDisplay, mContext);
+      eglTerminate(mDisplay);
+    }
+  }
+private:
+  EGLDisplay mDisplay;
+  EGLContext mContext;
+  EGLSurface mSurface;
+
+  GLuint mVertexShader;
+  GLuint mFragmentShader;
+  GLuint mProgram;
+  GLuint mTexture;
+};
+
 class OggDecoder
 {
 public:
-  StreamMap mStreams;  
-  SDL_Surface* mSurface;
-  SDL_Overlay* mOverlay;
+  StreamMap mStreams; 
+  DisplaySink* mDisplaySink;
   sa_stream_t* mAudio;
   ogg_int64_t  mGranulepos;
   
@@ -140,9 +416,8 @@ private:
   void handle_theora_data(OggStream* stream, ogg_packet* packet);
 
 public:
-  OggDecoder() :
-    mSurface(0),
-    mOverlay(0),
+  OggDecoder(DisplaySink* display_sink) :
+    mDisplaySink(display_sink),
     mAudio(0),
     mGranulepos(0)
   {
@@ -153,10 +428,7 @@ public:
       sa_stream_drain(mAudio);
       sa_stream_destroy(mAudio);
     }
-    if (mSurface) {
-      SDL_FreeSurface(mSurface);
-      mSurface = 0;
-    }
+    delete mDisplaySink;
   }
   void play(istream& stream);
 };
@@ -392,6 +664,7 @@ void OggDecoder::play(istream& is) {
       }
     }
         
+#if 0
     // Check for SDL events to exit
     SDL_Event event;
     if (SDL_PollEvent(&event) == 1) {
@@ -402,6 +675,7 @@ void OggDecoder::play(istream& is) {
 	  event.key.keysym.sym == SDLK_SPACE)
 	SDL_WM_ToggleFullScreen(mSurface);
     } 
+#endif
   }
 
   // Cleanup
@@ -451,51 +725,7 @@ void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
     ret = th_decode_ycbcr_out(stream->mTheora.mCtx, buffer);
     assert(ret == 0);
 
-    // Create an SDL surface to display if we haven't
-    // already got one.
-    if (!mSurface) {
-      int r = SDL_Init(SDL_INIT_VIDEO);
-      assert(r == 0);
-      mSurface = SDL_SetVideoMode(buffer[0].width, 
-				  buffer[0].height,
-				  32,
-				  SDL_SWSURFACE);
-      assert(mSurface);
-    }
-   
-    // Create a YUV overlay to do the YUV to RGB conversion
-    if (!mOverlay) {
-      mOverlay = SDL_CreateYUVOverlay(buffer[0].width,
-				      buffer[0].height,
-				      SDL_YV12_OVERLAY,
-				      mSurface);
-      assert(mOverlay);
-    }
-
-    SDL_Rect rect;
-    rect.x = 0;
-    rect.y = 0;
-    rect.w = buffer[0].width;
-    rect.h = buffer[0].height;
-    
-    SDL_LockYUVOverlay(mOverlay);
-    for (int i=0; i < buffer[0].height; ++i)
-      memcpy(mOverlay->pixels[0]+(mOverlay->pitches[0]*i), 
-	     buffer[0].data+(buffer[0].stride*i), 
-	     mOverlay->pitches[0]);
-    
-    for (int i=0; i < buffer[2].height; ++i)
-      memcpy(mOverlay->pixels[2]+(mOverlay->pitches[2]*i), 
-	     buffer[1].data+(buffer[1].stride*i), 
-	     mOverlay->pitches[2]);
-    
-    for (int i=0; i < buffer[1].height; ++i)
-      memcpy(mOverlay->pixels[1]+(mOverlay->pitches[1]*i), 
-	     buffer[2].data+(buffer[2].stride*i), 
-	     mOverlay->pitches[1]);
-    
-    SDL_UnlockYUVOverlay(mOverlay);	  
-    SDL_DisplayYUVOverlay(mOverlay, &rect);
+    mDisplaySink->Show(buffer);
   }
 }
 
@@ -518,18 +748,32 @@ bool OggDecoder::handle_vorbis_header(OggStream* stream, ogg_packet* packet) {
 }
 
 void usage() {
-  cout << "Usage: plogg <filename>" << endl;
+  cout << "Usage: plogg [--gl] <filename>" << endl;
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) { 
+  if (argc < 2 || argc > 3) { 
     usage();
     return 0;
   }
 
-  ifstream file(argv[1], ios::in | ios::binary);
+  bool use_gl = false;
+  char const* path = argv[1];
+  if (argc == 3) {
+    if (strcmp(argv[1], "--gl") == 0) {
+    use_gl = true;
+    path = argv[2];
+    } else {
+      usage();
+      return 0;
+    }
+  }
+
+  ifstream file(path, ios::in | ios::binary);
   if (file) {
-    OggDecoder decoder;
+    OggDecoder decoder(use_gl ?
+		       static_cast<DisplaySink*>(new GL_DisplaySink) :
+		       static_cast<DisplaySink*>(new SDL_DisplaySink));
     decoder.play(file);
     file.close();
     for(StreamMap::iterator it = decoder.mStreams.begin();
@@ -539,7 +783,6 @@ int main(int argc, char* argv[]) {
       delete stream;
     }
   }
-  SDL_Quit();
   return 0;
 }
 // Copyright (C) 2009 Chris Double. All Rights Reserved.

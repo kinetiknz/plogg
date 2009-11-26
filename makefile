@@ -27,7 +27,7 @@ plogg.o: plogg.cpp local/lib/libogg.a local/lib/libtheora.a local/lib/libvorbis.
 	g++ -g -c $(INCLUDE) -Ilocal/include -o plogg.o plogg.cpp
 
 plogg: plogg.o 
-	g++ -g -o plogg plogg.o local/lib/libsydneyaudio.a local/lib/libvorbis.a local/lib/libtheora.a local/lib/libogg.a -lSDL $(LIBS)
+	g++ -g -o plogg plogg.o local/lib/libsydneyaudio.a local/lib/libvorbis.a local/lib/libtheora.a local/lib/libogg.a -lSDL -lX11 -lEGL -lGLESv2 $(LIBS)
 
 clean: 
 	rm *.o plogg
