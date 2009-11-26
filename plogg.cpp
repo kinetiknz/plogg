@@ -290,11 +290,23 @@ public:
       assert(compiled);
 
       char const* fshader =
-	"uniform sampler2D sampler2d;\n"
+	"uniform sampler2D ytx, utx, vtx;\n"
 	"varying mediump vec2 myTexCoord;\n"
 	"void main()\n"
 	"{\n"
-	"gl_FragColor = texture2D(sampler2d, myTexCoord);\n"
+	"mediump float nx, ny, y, u, v, r, g, b;\n"
+	"nx = myTexCoord[0];\n"
+	"ny = 1.0 - myTexCoord[1];\n"
+	"y = texture2D(ytx, vec2(nx, ny)).r;\n"
+	"u = texture2D(utx, vec2(nx, ny)).r;\n"
+	"v = texture2D(vtx, vec2(nx, ny)).r;\n"
+	"y = 1.1643 * (y - 0.0625);\n"
+	"u = u - 0.5;\n"
+	"v = v - 0.5;\n"
+	"r = y + 1.5958 * v;\n"
+	"g = y - 0.39173 * u - 0.8129 * v;\n"
+	"b = y + 2.017 * u;\n"
+	"gl_FragColor = vec4(r, g, b, 1.0);\n"
 	"}\n";
       mFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
       assert(mFragmentShader);
@@ -314,32 +326,56 @@ public:
       assert(compiled);
 
       glUseProgram(mProgram);
-      glUniform1i(glGetUniformLocation(mProgram, "sampler2d"), 0);
+
+      glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
+      glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
+      glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
+
       glClearColor(0.6, 0.8, 1.0, 1.0);
-      glGenTextures(1, &mTexture);
-      assert(mTexture);
-      glBindTexture(GL_TEXTURE_2D, mTexture);
+      glGenTextures(3, mTextures);
+      assert(mTextures[0] && mTextures[1] && mTextures[2]);
 
       mDisplay = dpy;
       mContext = ctx;
       mSurface = srf;
     }
 
-    unsigned int* rgb = new unsigned int[buffer[0].width * buffer[0].height];
-    for (int i = 0; i < buffer[0].height; ++i) {
-      for (int j = 0; j < buffer[0].width; ++j) {
-	unsigned int v = buffer[0].data[i * buffer[0].stride + j];
-	unsigned int c = (v << 24) + (v << 16) + (v << 8) + 0;
-	rgb[(buffer[0].height - i) * buffer[0].width + j] = c;
-      }
-    }
+    unsigned char* rgb = new unsigned char[buffer[0].width * buffer[0].height];
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, buffer[0].width, buffer[0].height,
-		 0, GL_RGBA, GL_UNSIGNED_BYTE, rgb);
-    delete [] rgb;
-
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, mTextures[0]);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[0].stride);
+    for (unsigned int y = 0; y < buffer[0].height; ++y) {
+      memcpy(rgb + y * buffer[0].width, buffer[0].data + y * buffer[0].stride, buffer[0].width);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[0].width, buffer[0].height,
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, mTextures[1]);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
+    for (unsigned int y = 0; y < buffer[1].height; ++y) {
+      memcpy(rgb + y * buffer[1].width, buffer[1].data + y * buffer[1].stride, buffer[1].width);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[1].width, buffer[1].height,
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, mTextures[2]);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[2].stride);
+    for (unsigned int y = 0; y < buffer[2].height; ++y) {
+      memcpy(rgb + y * buffer[2].width, buffer[2].data + y * buffer[2].stride, buffer[2].width);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[2].width, buffer[2].height,
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
+
+    delete [] rgb;
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -395,7 +431,7 @@ private:
   GLuint mVertexShader;
   GLuint mFragmentShader;
   GLuint mProgram;
-  GLuint mTexture;
+  GLuint mTextures[3];
 };
 
 class OggDecoder
