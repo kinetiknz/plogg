@@ -396,9 +396,14 @@ private:
     glBindAttribLocation(mProgram, 0, "myVertex");
     glBindAttribLocation(mProgram, 1, "myUV");
     glLinkProgram(mProgram);
-    GLint compiled;
-    glGetProgramiv(mProgram, GL_LINK_STATUS, &compiled);
-    assert(compiled);
+    GLint linked;
+    glGetProgramiv(mProgram, GL_LINK_STATUS, &linked);
+    if (!linked) {
+      char buf[4096];
+      glGetProgramInfoLog(mProgram, sizeof(buf), NULL, buf);
+      printf("link error: %s\n", buf);
+    }
+    assert(linked);
 
     glUseProgram(mProgram);
 
@@ -417,6 +422,11 @@ private:
     glCompileShader(shader);
     GLint compiled;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+      char buf[4096];
+      glGetShaderInfoLog(shader, sizeof(buf), NULL, buf);
+      printf("compile error: %s\n", buf);
+    }
     assert(compiled);
     return shader;
   }
