@@ -202,184 +202,21 @@ public:
 
   void Show(th_ycbcr_buffer const& buffer) {
     if (!mDisplay) {
-      /*
-       * Create a Window in 100 easy steps.
-       */
-      Display* xdpy = XOpenDisplay(NULL);
-      assert(xdpy);
-
-      int screen = XDefaultScreen(xdpy);
-      Window root = RootWindow(xdpy, screen);
-      int depth = DefaultDepth(xdpy, screen);
-
-      XVisualInfo visual;
-      XMatchVisualInfo(xdpy, screen, depth, TrueColor, &visual);
-
-      Colormap cmap = XCreateColormap(xdpy, root, visual.visual, AllocNone);
-
-      XSetWindowAttributes xswa;
-      xswa.colormap = cmap;
-      xswa.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask |
-	ButtonReleaseMask | KeyPressMask | KeyReleaseMask;
-      // xswa.override_redirect = True;
-
-      unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap; // | CWOverrideRedirect;
-
-      Window xwin = XCreateWindow(xdpy, root, 0, 0,
-				  buffer[0].width, buffer[0].height, 0,
-				  // 800, 480, 0,
-				  CopyFromParent, InputOutput,
-				  CopyFromParent, mask, &xswa);
-      assert(xwin);
-
-      XMapWindow(xdpy, xwin);
-      XFlush(xdpy);
-
-      /*
-       * Initialize OpenGL ES 2.0 via EGL.
-       */
-      EGLDisplay dpy = eglGetDisplay((NativeDisplayType) xdpy);
-
-      if (eglInitialize(dpy, NULL, NULL) != EGL_TRUE)
-	assert(false);
-
-      EGLint attrs[] = {
-	EGL_BUFFER_SIZE, 16,
-	EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER,
-	EGL_DEPTH_SIZE, 16,
-	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-	EGL_NONE
-      };
-      EGLConfig cfg;
-      EGLint n_cfgs;
-      if (eglChooseConfig(dpy, attrs, &cfg, 1, &n_cfgs) != EGL_TRUE)
-	assert(false);
-
-      EGLSurface srf = eglCreateWindowSurface(dpy, cfg,
-					      (NativeWindowType) xwin, NULL);
-      if (srf == EGL_NO_SURFACE)
-	assert(false);
-
-      eglBindAPI(EGL_OPENGL_ES_API);
-
-      EGLint ctxattrs[] = {
-	EGL_CONTEXT_CLIENT_VERSION, 2,
-	EGL_NONE
-      };
-      EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxattrs);
-      if (ctx == EGL_NO_CONTEXT)
-	assert(false);
-
-      if (eglMakeCurrent(dpy, srf, srf, ctx) != EGL_TRUE)
-	assert(false);
-
-      char const* vshader =
-	"attribute vec4 myVertex;\n"
-	"attribute vec4 myUV;\n"
-	"uniform mat4 myPMVMatrix;\n"
-	"varying vec2 myTexCoord;\n"
-	"void main()\n"
-	"{\n"
-	"gl_Position = myPMVMatrix * myVertex;\n"
-	"myTexCoord = myUV.st;\n"
-	"}\n";
-      mVertexShader = glCreateShader(GL_VERTEX_SHADER);
-      assert(mVertexShader);
-      glShaderSource(mVertexShader, 1, &vshader, NULL);
-      glCompileShader(mVertexShader);
-      GLint compiled;
-      glGetShaderiv(mVertexShader, GL_COMPILE_STATUS, &compiled);
-      assert(compiled);
-
-      char const* fshader =
-	"uniform sampler2D ytx, utx, vtx;\n"
-	"varying mediump vec2 myTexCoord;\n"
-	"void main()\n"
-	"{\n"
-	"mediump float nx, ny, y, u, v, r, g, b;\n"
-	"nx = myTexCoord[0];\n"
-	"ny = 1.0 - myTexCoord[1];\n"
-	"y = texture2D(ytx, vec2(nx, ny)).r;\n"
-	"u = texture2D(utx, vec2(nx, ny)).r;\n"
-	"v = texture2D(vtx, vec2(nx, ny)).r;\n"
-	"y = 1.1643 * (y - 0.0625);\n"
-	"u = u - 0.5;\n"
-	"v = v - 0.5;\n"
-	"r = y + 1.5958 * v;\n"
-	"g = y - 0.39173 * u - 0.8129 * v;\n"
-	"b = y + 2.017 * u;\n"
-	"gl_FragColor = vec4(r, g, b, 1.0);\n"
-	"}\n";
-      mFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-      assert(mFragmentShader);
-      glShaderSource(mFragmentShader, 1, &fshader, NULL);
-      glCompileShader(mFragmentShader);
-      glGetShaderiv(mFragmentShader, GL_COMPILE_STATUS, &compiled);
-      assert(compiled);
-
-      mProgram = glCreateProgram();
-      assert(mProgram);
-      glAttachShader(mProgram, mVertexShader);
-      glAttachShader(mProgram, mFragmentShader);
-      glBindAttribLocation(mProgram, 0, "myVertex");
-      glBindAttribLocation(mProgram, 1, "myUV");
-      glLinkProgram(mProgram);
-      glGetProgramiv(mProgram, GL_LINK_STATUS, &compiled);
-      assert(compiled);
-
-      glUseProgram(mProgram);
-
-      glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
-      glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
-      glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
-
-      glClearColor(0.6, 0.8, 1.0, 1.0);
-      glGenTextures(3, mTextures);
-      assert(mTextures[0] && mTextures[1] && mTextures[2]);
-
-      mDisplay = dpy;
-      mContext = ctx;
-      mSurface = srf;
+      init_x11(buffer[0].width, buffer[0].height, false);
+      init_gles();
     }
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, mTextures[0]);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[0].stride);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[0].width, buffer[0].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
-    for (unsigned int y = 0; y < buffer[0].height; ++y) {
-      unsigned char* row = buffer[0].data + (y * buffer[0].stride);
-      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[0].width, 1,
-		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
-    }
+    bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
+		 buffer[0].stride, buffer[0].data);
 
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, mTextures[1]);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[1].width, buffer[1].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
-    for (unsigned int y = 0; y < buffer[1].height; ++y) {
-      unsigned char* row = buffer[1].data + (y * buffer[1].stride);
-      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[1].width, 1,
-		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
-    }
+    bind_texture(mTextures[1], buffer[1].width, buffer[1].height,
+		 buffer[1].stride, buffer[1].data);
 
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, mTextures[2]);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[2].stride);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[2].width, buffer[2].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
-    for (unsigned int y = 0; y < buffer[2].height; ++y) {
-      unsigned char* row = buffer[2].data + (y * buffer[2].stride);
-      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[2].width, 1,
-		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
-    }
+    bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
+		 buffer[2].stride, buffer[2].data);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -428,6 +265,175 @@ public:
     }
   }
 private:
+  void init_x11(unsigned int w, unsigned int h, bool fullscreen) {
+    /*
+     * Create a Window in 100 easy steps.
+     */
+    Display* xdpy = XOpenDisplay(NULL);
+    assert(xdpy);
+
+    int screen = XDefaultScreen(xdpy);
+    Window root = RootWindow(xdpy, screen);
+    int depth = DefaultDepth(xdpy, screen);
+
+    XVisualInfo visual;
+    XMatchVisualInfo(xdpy, screen, depth, TrueColor, &visual);
+
+    Colormap cmap = XCreateColormap(xdpy, root, visual.visual, AllocNone);
+
+    XSetWindowAttributes xswa;
+    xswa.colormap = cmap;
+    xswa.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask |
+      ButtonReleaseMask | KeyPressMask | KeyReleaseMask;
+
+    unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap;
+
+    if (fullscreen) {
+      xswa.override_redirect = True;
+      mask |= CWOverrideRedirect;
+    }
+
+    Window xwin = XCreateWindow(xdpy, root, 0, 0,
+				w, h, 0,
+				CopyFromParent, InputOutput,
+				CopyFromParent, mask, &xswa);
+    assert(xwin);
+
+    XMapWindow(xdpy, xwin);
+    XFlush(xdpy);
+
+    init_egl(xdpy, xwin);
+  }
+
+  void init_egl(Display* display, Window window) {
+    /*
+     * Initialize OpenGL ES 2.0 via EGL.
+     */
+    EGLDisplay dpy = eglGetDisplay((NativeDisplayType) display);
+
+    if (eglInitialize(dpy, NULL, NULL) != EGL_TRUE)
+      assert(false);
+
+    EGLint attrs[] = {
+      EGL_BUFFER_SIZE, 16,
+      EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER,
+      EGL_DEPTH_SIZE, 16,
+      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+      EGL_NONE
+    };
+    EGLConfig cfg;
+    EGLint n_cfgs;
+    if (eglChooseConfig(dpy, attrs, &cfg, 1, &n_cfgs) != EGL_TRUE)
+      assert(false);
+
+    EGLSurface srf = eglCreateWindowSurface(dpy, cfg,
+					    (NativeWindowType) window, NULL);
+    if (srf == EGL_NO_SURFACE)
+      assert(false);
+
+    eglBindAPI(EGL_OPENGL_ES_API);
+
+    EGLint ctxattrs[] = {
+      EGL_CONTEXT_CLIENT_VERSION, 2,
+      EGL_NONE
+    };
+    EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctxattrs);
+    if (ctx == EGL_NO_CONTEXT)
+      assert(false);
+
+    if (eglMakeCurrent(dpy, srf, srf, ctx) != EGL_TRUE)
+      assert(false);
+
+    mDisplay = dpy;
+    mContext = ctx;
+    mSurface = srf;
+  }
+
+  void init_gles() {
+    char const* vshader =
+      "attribute vec4 myVertex;\n"
+      "attribute vec4 myUV;\n"
+      "uniform mat4 myPMVMatrix;\n"
+      "varying vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "gl_Position = myPMVMatrix * myVertex;\n"
+      "myTexCoord = myUV.st;\n"
+      "}\n";
+    mVertexShader = compile_shader(GL_VERTEX_SHADER, vshader);
+
+    char const* fshader =
+      "uniform sampler2D ytx, utx, vtx;\n"
+      "varying mediump vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "mediump float nx, ny, y, u, v, r, g, b;\n"
+      "nx = myTexCoord[0];\n"
+      "ny = 1.0 - myTexCoord[1];\n"
+      "y = texture2D(ytx, vec2(nx, ny)).r;\n"
+      "u = texture2D(utx, vec2(nx, ny)).r - 0.5;\n"
+      "v = texture2D(vtx, vec2(nx, ny)).r - 0.5;\n"
+      "y = 1.1643 * (y - 0.0625);\n"
+      "r = y + 1.5958 * v;\n"
+      "g = y - 0.39173 * u - 0.8129 * v;\n"
+      "b = y + 2.017 * u;\n"
+      "gl_FragColor = vec4(r, g, b, 1.0);\n"
+      "}\n";
+    mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshader);
+
+    mProgram = glCreateProgram();
+    assert(mProgram);
+    glAttachShader(mProgram, mVertexShader);
+    glAttachShader(mProgram, mFragmentShader);
+    glBindAttribLocation(mProgram, 0, "myVertex");
+    glBindAttribLocation(mProgram, 1, "myUV");
+    glLinkProgram(mProgram);
+    GLint compiled;
+    glGetProgramiv(mProgram, GL_LINK_STATUS, &compiled);
+    assert(compiled);
+
+    glUseProgram(mProgram);
+
+    glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
+    glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
+    glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
+
+    glGenTextures(3, mTextures);
+    assert(mTextures[0] && mTextures[1] && mTextures[2]);
+  }
+
+  GLuint compile_shader(GLenum type, char const* src) {
+    GLuint shader = glCreateShader(type);
+    assert(shader);
+    glShaderSource(shader, 1, &src, NULL);
+    glCompileShader(shader);
+    GLint compiled;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    assert(compiled);
+    return shader;
+  }
+
+  void bind_texture(GLuint texID, unsigned int w, unsigned int h, unsigned int stride,
+		    unsigned char const* data) {
+    glBindTexture(GL_TEXTURE_2D, texID);
+
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // This would be nice to use if it existed in GLES.
+    //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
+
+    // But it doesn't, so we have to upload row-by-row, accounting for
+    // the stride ourselves.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w, h, 0,
+		 GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+    for (unsigned int y = 0; y < h; ++y) {
+      unsigned char const* row = data + (y * stride);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, w, 1,
+		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
+    }
+  }
+
   EGLDisplay mDisplay;
   EGLContext mContext;
   EGLSurface mSurface;
