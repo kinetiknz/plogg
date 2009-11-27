@@ -378,7 +378,7 @@ private:
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
-      "mediump float nx, ny, y, u, v, r, g, b;\n"
+      "mediump float y, u, v, r, g, b;\n"
       "y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
       "u = texture2D(utx, myTexCoord).r - 0.5;\n"
       "v = texture2D(vtx, myTexCoord).r - 0.5;\n"
