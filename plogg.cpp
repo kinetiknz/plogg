@@ -343,42 +343,44 @@ public:
       mSurface = srf;
     }
 
-    unsigned char* rgb = new unsigned char[buffer[0].width * buffer[0].height];
-
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, mTextures[0]);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[0].stride);
-    for (unsigned int y = 0; y < buffer[0].height; ++y) {
-      memcpy(rgb + y * buffer[0].width, buffer[0].data + y * buffer[0].stride, buffer[0].width);
-    }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[0].width, buffer[0].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+    for (unsigned int y = 0; y < buffer[0].height; ++y) {
+      unsigned char* row = buffer[0].data + (y * buffer[0].stride);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[0].width, 1,
+		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
+    }
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, mTextures[1]);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
-    for (unsigned int y = 0; y < buffer[1].height; ++y) {
-      memcpy(rgb + y * buffer[1].width, buffer[1].data + y * buffer[1].stride, buffer[1].width);
-    }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[1].width, buffer[1].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+    for (unsigned int y = 0; y < buffer[1].height; ++y) {
+      unsigned char* row = buffer[1].data + (y * buffer[1].stride);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[1].width, 1,
+		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
+    }
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, mTextures[2]);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[2].stride);
-    for (unsigned int y = 0; y < buffer[2].height; ++y) {
-      memcpy(rgb + y * buffer[2].width, buffer[2].data + y * buffer[2].stride, buffer[2].width);
-    }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, buffer[2].width, buffer[2].height,
-		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, rgb);
-
-    delete [] rgb;
+		 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+    for (unsigned int y = 0; y < buffer[2].height; ++y) {
+      unsigned char* row = buffer[2].data + (y * buffer[2].stride);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, buffer[2].width, 1,
+		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
+    }
 
     glClear(GL_COLOR_BUFFER_BIT);
 
