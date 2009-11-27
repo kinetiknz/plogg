@@ -221,11 +221,14 @@ public:
       xswa.colormap = cmap;
       xswa.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask |
 	ButtonReleaseMask | KeyPressMask | KeyReleaseMask;
+      xswa.override_redirect = True;
 
-      unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap;
+      unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask |
+	CWColormap | CWOverrideRedirect;
 
       Window xwin = XCreateWindow(xdpy, root, 0, 0,
-				  buffer[0].width, buffer[0].height, 0,
+				  // buffer[0].width, buffer[0].height, 0,
+				  800, 480, 0,
 				  CopyFromParent, InputOutput,
 				  CopyFromParent, mask, &xswa);
       assert(xwin);
