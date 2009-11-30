@@ -365,6 +365,9 @@ private:
     glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
     assert(maxUnits >= 3);
 
+    GLubyte const* glExts = glGetString(GL_EXTENSIONS);
+    assert(strstr((char const*) glExts, "GL_IMG_texture_npot"));
+
     char const* vshader =
       "attribute vec4 myVertex;\n"
       "attribute vec4 myUV;\n"
