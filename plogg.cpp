@@ -361,6 +361,10 @@ private:
   }
 
   void init_gles() {
+    GLint maxUnits;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
+    assert(maxUnits >= 3);
+
     char const* vshader =
       "attribute vec4 myVertex;\n"
       "attribute vec4 myUV;\n"
