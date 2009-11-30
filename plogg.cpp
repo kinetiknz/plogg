@@ -15,6 +15,8 @@
 #include <X11/Xutil.h>
 #include <GLES2/gl2.h>
 #include <EGL/egl.h>
+// Timing.
+#include <sys/time.h>
 
 extern "C" {
 #include <sydney_audio.h>
@@ -206,6 +208,8 @@ public:
       init_gles();
     }
 
+    struct timeval start, end, dt;
+    gettimeofday(&start, NULL);
     glActiveTexture(GL_TEXTURE0);
     bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
 		 buffer[0].stride, buffer[0].data);
@@ -217,6 +221,9 @@ public:
     glActiveTexture(GL_TEXTURE2);
     bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
 		 buffer[2].stride, buffer[2].data);
+    gettimeofday(&end, NULL);
+    timersub(&end, &start, &dt);
+    printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -240,14 +247,18 @@ public:
 
     glEnableVertexAttribArray(1);
     GLfloat const coords[] = {
-      0.0, 0.0,
-      1.0, 0.0,
       0.0, 1.0,
-      1.0, 1.0
+      1.0, 1.0,
+      0.0, 0.0,
+      1.0, 0.0
     };
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, coords);
 
+    gettimeofday(&start, NULL);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    gettimeofday(&end, NULL);
+    timersub(&end, &start, &dt);
+    printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     eglSwapBuffers(mDisplay, mSurface);
   }
@@ -368,12 +379,9 @@ private:
       "void main()\n"
       "{\n"
       "mediump float nx, ny, y, u, v, r, g, b;\n"
-      "nx = myTexCoord[0];\n"
-      "ny = 1.0 - myTexCoord[1];\n"
-      "y = texture2D(ytx, vec2(nx, ny)).r;\n"
-      "u = texture2D(utx, vec2(nx, ny)).r - 0.5;\n"
-      "v = texture2D(vtx, vec2(nx, ny)).r - 0.5;\n"
-      "y = 1.1643 * (y - 0.0625);\n"
+      "y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
+      "u = texture2D(utx, myTexCoord).r - 0.5;\n"
+      "v = texture2D(vtx, myTexCoord).r - 0.5;\n"
       "r = y + 1.5958 * v;\n"
       "g = y - 0.39173 * u - 0.8129 * v;\n"
       "b = y + 2.017 * u;\n"
