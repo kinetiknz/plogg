@@ -223,7 +223,7 @@ public:
 		 buffer[2].stride, buffer[2].data);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -258,7 +258,7 @@ public:
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     eglSwapBuffers(mDisplay, mSurface);
   }
@@ -473,7 +473,11 @@ public:
   DisplaySink* mDisplaySink;
   sa_stream_t* mAudio;
   ogg_int64_t  mGranulepos;
-  
+
+private:
+  struct timeval mTimeStamp[100];
+  unsigned int mTimeStampPos;
+
 private:
   bool handle_theora_header(OggStream* stream, ogg_packet* packet);
   bool handle_vorbis_header(OggStream* stream, ogg_packet* packet);
@@ -487,7 +491,8 @@ public:
   OggDecoder(DisplaySink* display_sink) :
     mDisplaySink(display_sink),
     mAudio(0),
-    mGranulepos(0)
+    mGranulepos(0),
+    mTimeStampPos(0)
   {
   }
 
@@ -794,6 +799,19 @@ void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
     assert(ret == 0);
 
     mDisplaySink->Show(buffer);
+
+    gettimeofday(&mTimeStamp[mTimeStampPos++], NULL);
+    size_t elems = sizeof(mTimeStamp) / sizeof(mTimeStamp[0]);
+    if (mTimeStampPos == elems) {
+      mTimeStampPos = 0;
+      double frameTime  = 0;
+      for (unsigned i = 1; i < elems; ++i) {
+	struct timeval dt;
+	timersub(&mTimeStamp[i], &mTimeStamp[i - 1], &dt);
+	frameTime += dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0;
+      }
+      printf("%f FPS\n", 1000.0 / (frameTime / (elems - 1)));
+    }
   }
 }
 
