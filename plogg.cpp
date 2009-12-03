@@ -18,6 +18,20 @@
 // Timing.
 #include <sys/time.h>
 #include <float.h>
+// Texture streaming.
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#define LINUX 1
+#include "bc_cat.h"
+#include <GLES2/gl2ext.h>
+
+PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
+PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
+PFNGLGETTEXSTREAMDEVICEATTRIBUTEIVIMGPROC glGetTexStreamDeviceAttributeivIMG;
+
 
 extern "C" {
 #include <sydney_audio.h>
@@ -205,12 +219,15 @@ public:
 
   void Show(th_ycbcr_buffer const& buffer) {
     if (!mDisplay) {
-      init_x11(buffer[0].width, buffer[0].height, false);
+      //init_x11(buffer[0].width, buffer[0].height, false);
+      init_x11(800, 480, true);
       init_gles();
+      setup_bcbufs(buffer[0].width, buffer[0].height);
     }
 
     struct timeval start, end, dt;
     gettimeofday(&start, NULL);
+#if 0
     glActiveTexture(GL_TEXTURE0);
     bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
 		 buffer[0].stride, buffer[0].data);
@@ -222,9 +239,24 @@ public:
     glActiveTexture(GL_TEXTURE2);
     bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
 		 buffer[2].stride, buffer[2].data);
+#else
+    unsigned char* p = (unsigned char*) mMappedTexture;
+    for (unsigned int i = 0; i < buffer[0].height; ++i) {
+      unsigned char* y = buffer[0].data + (i * buffer[0].stride);
+      unsigned char* u = buffer[1].data + (i / 2 * buffer[1].stride);
+      unsigned char* v = buffer[2].data + (i / 2 * buffer[2].stride);
+      for (unsigned int j = 0; j < buffer[0].width; j += 2) {
+	p[0] = u[j / 2];
+	p[1] = y[j];
+	p[2] = v[j / 2];
+	p[3] = y[j + 1];
+	p += 4;
+      }
+    }
+#endif
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    //    printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -259,7 +291,7 @@ public:
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    //    printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     eglSwapBuffers(mDisplay, mSurface);
   }
@@ -381,6 +413,7 @@ private:
       "}\n";
     mVertexShader = compile_shader(GL_VERTEX_SHADER, vshader);
 
+#if 0
     char const* fshader =
       "uniform sampler2D ytx, utx, vtx;\n"
       "varying mediump vec2 myTexCoord;\n"
@@ -395,6 +428,16 @@ private:
       "b = y + 2.017 * u;\n"
       "gl_FragColor = vec4(r, g, b, 1.0);\n"
       "}\n";
+#else
+    char const* fshader =
+      "#extension GL_IMG_texture_stream2 : enable\n"
+      "uniform samplerStreamIMG tx;\n"
+      "varying mediump vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "gl_FragColor = textureStreamIMG(tx, myTexCoord);\n"
+      "}\n";
+#endif
     mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshader);
 
     mProgram = glCreateProgram();
@@ -415,12 +458,16 @@ private:
 
     glUseProgram(mProgram);
 
+#if 0
     glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
     glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
     glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
 
     glGenTextures(3, mTextures);
     assert(mTextures[0] && mTextures[1] && mTextures[2]);
+#else
+    glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
+#endif
   }
 
   GLuint compile_shader(GLenum type, char const* src) {
@@ -460,6 +507,64 @@ private:
       glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, w, 1,
 		      GL_LUMINANCE, GL_UNSIGNED_BYTE, row);
     }
+  }
+
+  void setup_bcbufs(unsigned int w, unsigned int h) {
+    GLubyte const* glExts = glGetString(GL_EXTENSIONS);
+    assert(strstr((char const*) glExts, "GL_IMG_texture_stream"));
+
+    glTexBindStreamIMG = 
+      (PFNGLTEXBINDSTREAMIMGPROC) eglGetProcAddress("glTexBindStreamIMG");
+    glGetTexStreamDeviceNameIMG =
+      (PFNGLGETTEXSTREAMDEVICENAMEIMGPROC) eglGetProcAddress("glGetTexStreamDeviceNameIMG");
+    glGetTexStreamDeviceAttributeivIMG =
+      (PFNGLGETTEXSTREAMDEVICEATTRIBUTEIVIMGPROC) eglGetProcAddress("glGetTexStreamDeviceAttributeivIMG");
+    assert(glTexBindStreamIMG && glGetTexStreamDeviceNameIMG && glGetTexStreamDeviceAttributeivIMG);
+
+    // XXXkinetik what's the point of ndelay?
+    int fd = open("/dev/bc_cat", O_RDWR | O_NDELAY);
+    assert(fd >= 0);
+
+    bc_buf_params_t param;
+    param.count = 1;
+    assert(w % 32 == 0);
+    param.width = w;
+    param.height = h;
+    // XXXkinetik example uses UYVY (packed), we want YV12(?) which is
+    // planar packed is single buf per frame, how would planar look?
+    // doesn't matter - driver doesn't support it anyway
+    param.pixel_fmt = PVRSRV_PIXEL_FORMAT_FOURCC_ORG_UYVY;
+    param.type = BC_MEMORY_MMAP;
+    int r = ioctl(fd, BCIOREQ_BUFFERS, &param);
+    assert(r >= 0);
+
+    printf("BC setup: %d bufs of %dx%d (stride %d, size %d)\n",
+	   param.count, param.width, param.height, param.stride, param.size);
+
+    BCIO_package buf_param;
+    buf_param.input = 0;
+    r = ioctl(fd, BCIOGET_BUFFERPHYADDR, &buf_param);
+    assert(r >= 0);
+
+    size_t size = w * h * 2;
+    void* p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf_param.output);
+    assert(p != MAP_FAILED);
+    mMappedTexture = p;
+
+    GLubyte const* devname = glGetTexStreamDeviceNameIMG(0);
+    printf("BC GL: devname=%s", devname);
+
+    GLint nbufs;
+    glGetTexStreamDeviceAttributeivIMG(0, GL_TEXTURE_STREAM_DEVICE_NUM_BUFFERS_IMG, &nbufs);
+    GLint width;
+    glGetTexStreamDeviceAttributeivIMG(0, GL_TEXTURE_STREAM_DEVICE_WIDTH_IMG, &width);
+    GLint height;
+    glGetTexStreamDeviceAttributeivIMG(0, GL_TEXTURE_STREAM_DEVICE_HEIGHT_IMG, &height);
+    GLint fmt;
+    glGetTexStreamDeviceAttributeivIMG(0, GL_TEXTURE_STREAM_DEVICE_FORMAT_IMG, &fmt);
+    printf("BC GL: nbufs %d, %dx%d, fmt=%d\n", nbufs, width, height, fmt);
+
+    glTexBindStreamIMG(0, 0);
   }
 
   EGLDisplay mDisplay;
