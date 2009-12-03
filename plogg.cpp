@@ -17,6 +17,7 @@
 #include <EGL/egl.h>
 // Timing.
 #include <sys/time.h>
+#include <float.h>
 
 extern "C" {
 #include <sydney_audio.h>
@@ -223,7 +224,7 @@ public:
 		 buffer[2].stride, buffer[2].data);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    //printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //    printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -258,7 +259,7 @@ public:
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
-    //printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
+    //    printf("%f\n", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
     eglSwapBuffers(mDisplay, mSurface);
   }
@@ -385,7 +386,7 @@ private:
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
-      "mediump float y, u, v, r, g, b;\n"
+      "lowp float y, u, v, r, g, b;\n"
       "y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
       "u = texture2D(utx, myTexCoord).r - 0.5;\n"
       "v = texture2D(vtx, myTexCoord).r - 0.5;\n"
@@ -442,8 +443,10 @@ private:
 		    unsigned char const* data) {
     glBindTexture(GL_TEXTURE_2D, texID);
 
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     // This would be nice to use if it existed in GLES.
     //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
@@ -808,12 +811,21 @@ void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
     if (mTimeStampPos == elems) {
       mTimeStampPos = 0;
       double frameTime  = 0;
+      double minTime = DBL_MAX;
+      double maxTime = 0;
       for (unsigned i = 1; i < elems; ++i) {
 	struct timeval dt;
 	timersub(&mTimeStamp[i], &mTimeStamp[i - 1], &dt);
-	frameTime += dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0;
+	double time = dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0;
+	frameTime += time;
+	if (1000.0 / time < minTime) {
+	  minTime = 1000.0 / time;
+	}
+	if (1000.0 / time > maxTime) {
+	  maxTime = 1000.0 / time;
+	}
       }
-      printf("%f FPS\n", 1000.0 / (frameTime / (elems - 1)));
+      printf("%.1f/%.1f/%.1f FPS\n", minTime, 1000.0 / (frameTime / (elems - 1)), maxTime);
     }
   }
 }
