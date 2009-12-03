@@ -11,6 +11,7 @@
 #include <vorbis/codec.h>
 #include <SDL/SDL.h>
 // For OpenGL support.
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <GLES2/gl2.h>
@@ -219,8 +220,7 @@ public:
 
   void Show(th_ycbcr_buffer const& buffer) {
     if (!mDisplay) {
-      //init_x11(buffer[0].width, buffer[0].height, false);
-      init_x11(800, 480, true);
+      init_x11(buffer[0].width, buffer[0].height, true);
       init_gles();
       setup_bcbufs(buffer[0].width, buffer[0].height);
     }
@@ -332,19 +332,28 @@ private:
 
     unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap;
 
-    if (fullscreen) {
-      xswa.override_redirect = True;
-      mask |= CWOverrideRedirect;
-    }
-
     Window xwin = XCreateWindow(xdpy, root, 0, 0,
 				w, h, 0,
 				CopyFromParent, InputOutput,
 				CopyFromParent, mask, &xswa);
     assert(xwin);
 
-    XMapWindow(xdpy, xwin);
-    XFlush(xdpy);
+    if (fullscreen) {
+      Atom xatom = XInternAtom(xdpy, "_NET_WM_STATE", False);
+      Atom xstate = XInternAtom(xdpy, "_NET_WM_STATE_FULLSCREEN", False);
+      assert(xatom && xstate);
+      XChangeProperty(xdpy, xwin, xatom, XA_ATOM, 32, PropModeReplace,
+		      (unsigned char*) &xstate, 1);
+
+      xatom = XInternAtom(xdpy, "_HILDON_NON_COMPOSITED_WINDOW", False);
+      assert(xatom);
+      long atomval = 1;
+      XChangeProperty(xdpy, xwin, xatom, XA_INTEGER, 32, PropModeReplace,
+		      (unsigned char*) &atomval, 1);
+
+      XMapWindow(xdpy, xwin);
+      XFlush(xdpy);
+    }
 
     init_egl(xdpy, xwin);
   }
