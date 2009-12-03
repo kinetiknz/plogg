@@ -470,6 +470,21 @@ private:
   GLuint mFragmentShader;
   GLuint mProgram;
   GLuint mTextures[3];
+  void* mMappedTexture;
+};
+
+class Null_DisplaySink : public DisplaySink
+{
+public:
+  Null_DisplaySink() {
+  }
+
+
+  void Show(th_ycbcr_buffer const& buffer) {
+  }
+
+  virtual ~Null_DisplaySink() {
+  }
 };
 
 class OggDecoder
@@ -849,7 +864,7 @@ bool OggDecoder::handle_vorbis_header(OggStream* stream, ogg_packet* packet) {
 }
 
 void usage() {
-  cout << "Usage: plogg [--gl] <filename>" << endl;
+  cout << "Usage: plogg [--gl | --null] <filename>" << endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -858,23 +873,28 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  bool use_gl = false;
-  char const* path = argv[1];
+  DisplaySink* sink;
+  char const* path;
+
   if (argc == 3) {
     if (strcmp(argv[1], "--gl") == 0) {
-    use_gl = true;
-    path = argv[2];
+      sink = new GL_DisplaySink;
+      path = argv[2];
+    } else if (strcmp(argv[1], "--null") == 0) {
+      sink = new Null_DisplaySink;
+      path = argv[2];
     } else {
       usage();
       return 0;
     }
+  } else {
+    sink = new SDL_DisplaySink;
+    path = argv[1];
   }
 
   ifstream file(path, ios::in | ios::binary);
   if (file) {
-    OggDecoder decoder(use_gl ?
-		       static_cast<DisplaySink*>(new GL_DisplaySink) :
-		       static_cast<DisplaySink*>(new SDL_DisplaySink));
+    OggDecoder decoder(sink);
     decoder.play(file);
     file.close();
     for(StreamMap::iterator it = decoder.mStreams.begin();
