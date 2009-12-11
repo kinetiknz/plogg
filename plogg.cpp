@@ -326,11 +326,12 @@ private:
     Colormap cmap = XCreateColormap(xdpy, root, visual.visual, AllocNone);
 
     XSetWindowAttributes xswa;
+    memset(&xswa, 0, sizeof(xswa));
     xswa.colormap = cmap;
     xswa.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask |
       ButtonReleaseMask | KeyPressMask | KeyReleaseMask;
 
-    unsigned int mask = CWBackPixel | CWBorderPixel | CWEventMask | CWColormap;
+    unsigned int mask = CWEventMask | CWColormap;
 
     Window xwin = XCreateWindow(xdpy, root, 0, 0,
 				w, h, 0,
