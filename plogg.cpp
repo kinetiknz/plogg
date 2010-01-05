@@ -10,6 +10,7 @@
 #include <theora/theoradec.h>
 #include <vorbis/codec.h>
 #include <SDL/SDL.h>
+#include <SDL/SDL_syswm.h>
 // For OpenGL support.
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -28,6 +29,9 @@
 #define LINUX 1
 #include "bc_cat.h"
 #include <GLES2/gl2ext.h>
+
+#define FRAG_CONV 0
+#define FRAG_CONV_REAL 1
 
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
@@ -162,8 +166,8 @@ public:
     if (!mSurface) {
       mSurface = SDL_SetVideoMode(buffer[0].width,
 				  buffer[0].height,
-				  32,
-				  SDL_SWSURFACE);
+				  16,
+				  SDL_SWSURFACE | SDL_FULLSCREEN);
       assert(mSurface);
 
       mOverlay = SDL_CreateYUVOverlay(buffer[0].width,
@@ -171,6 +175,32 @@ public:
 				      SDL_YV12_OVERLAY,
 				      mSurface);
       assert(mOverlay);
+
+      SDL_SysWMinfo winfo;
+      SDL_VERSION(&winfo.version);
+      int r = SDL_GetWMInfo(&winfo);
+      assert(r == 1);
+
+      Display* dpys[2];
+      dpys[0] = winfo.info.x11.display;
+      dpys[1] = winfo.info.x11.gfxdisplay;
+
+      Window wins[3];
+      wins[0] = winfo.info.x11.window;
+      wins[1] = winfo.info.x11.fswindow;
+      wins[2] = winfo.info.x11.wmwindow;
+
+      for (int i = 0; i < 2; ++i) {
+	      for (int j = 0; j < 3; ++j) {
+		      Display* xdpy = dpys[i];
+		      Window xwin = wins[j];
+		      Atom xatom = XInternAtom(xdpy, "_HILDON_NON_COMPOSITED_WINDOW", False);
+		      assert(xatom);
+		      long atomval = 1;
+		      XChangeProperty(xdpy, xwin, xatom, XA_INTEGER, 32, PropModeReplace,
+				      (unsigned char*) &atomval, 1);
+	      }
+      }
     }
 
     SDL_Rect rect;
@@ -227,7 +257,7 @@ public:
 
     struct timeval start, end, dt;
     gettimeofday(&start, NULL);
-#if 0
+#if FRAG_CONV
     glActiveTexture(GL_TEXTURE0);
     bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
 		 buffer[0].stride, buffer[0].data);
@@ -351,10 +381,10 @@ private:
       long atomval = 1;
       XChangeProperty(xdpy, xwin, xatom, XA_INTEGER, 32, PropModeReplace,
 		      (unsigned char*) &atomval, 1);
-
-      XMapWindow(xdpy, xwin);
-      XFlush(xdpy);
     }
+
+    XMapWindow(xdpy, xwin);
+    XFlush(xdpy);
 
     init_egl(xdpy, xwin);
   }
@@ -423,13 +453,14 @@ private:
       "}\n";
     mVertexShader = compile_shader(GL_VERTEX_SHADER, vshader);
 
-#if 0
+#if FRAG_CONV
     char const* fshader =
       "uniform sampler2D ytx, utx, vtx;\n"
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
       "lowp float y, u, v, r, g, b;\n"
+#if FRAG_CONV_REAL
       "y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
       "u = texture2D(utx, myTexCoord).r - 0.5;\n"
       "v = texture2D(vtx, myTexCoord).r - 0.5;\n"
@@ -437,6 +468,10 @@ private:
       "g = y - 0.39173 * u - 0.8129 * v;\n"
       "b = y + 2.017 * u;\n"
       "gl_FragColor = vec4(r, g, b, 1.0);\n"
+#else
+      "y = texture2D(ytx, myTexCoord).r;\n"
+      "gl_FragColor = vec4(y, y, y, 1.0);\n"
+#endif
       "}\n";
 #else
     char const* fshader =
@@ -468,7 +503,7 @@ private:
 
     glUseProgram(mProgram);
 
-#if 0
+#if FRAG_CONV
     glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
     glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
     glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
