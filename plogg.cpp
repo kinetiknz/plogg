@@ -646,6 +646,8 @@ public:
   ogg_int64_t  mGranulepos;
 
 private:
+  bool mVideoFrameQueued;
+  th_ycbcr_buffer mVideoBuffer;
   struct timeval mTimeStamp[100];
   unsigned int mTimeStampPos;
 
@@ -657,14 +659,17 @@ private:
   bool read_page(istream& stream, ogg_sync_state* state, ogg_page* page);
   bool read_packet(istream& is, ogg_sync_state* state, OggStream* stream, ogg_packet* packet);
   void handle_theora_data(OggStream* stream, ogg_packet* packet);
+  void handle_theora_out();
 
 public:
   OggDecoder(DisplaySink* display_sink) :
     mDisplaySink(display_sink),
     mAudio(0),
     mGranulepos(0),
+    mVideoFrameQueued(false),
     mTimeStampPos(0)
   {
+    memset(mVideoBuffer,0,sizeof(mVideoBuffer));
   }
 
   ~OggDecoder() {
@@ -900,10 +905,8 @@ void OggDecoder::play(istream& is) {
 	  // Decode one frame and display it. If no frame is available we
 	  // don't do anything.
 	  ogg_packet packet;
-	  if (read_packet(is, &state, video, &packet)) {
-	    handle_theora_data(video, &packet);
-	    video_time = th_granule_time(video->mTheora.mCtx, mGranulepos);
-	  }
+	  handle_theora_data(video, 
+	   read_packet(is, &state, video, &packet) ? &packet : NULL);
 	}
       }
     }
@@ -950,25 +953,28 @@ bool OggDecoder::handle_theora_header(OggStream* stream, ogg_packet* packet) {
 }
 
 void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
-  // The granulepos for a packet gives the time of the end of the
-  // display interval of the frame in the packet.  We keep the
-  // granulepos of the frame we've decoded and use this to know the
-  // time when to display the next frame.
-  int ret = th_decode_packetin(stream->mTheora.mCtx,
-			       packet,
-			       &mGranulepos);
-  assert(ret == 0 || ret == TH_DUPFRAME);
-
-  // If the return code is TH_DUPFRAME then we don't need to
-  // get the YUV data and display it since it's the same as
-  // the previous frame.
-
-  if (1/*ret == 0*/) {
+  th_ycbcr_buffer buffer;
+  if (mVideoFrameQueued) {
     // We have a frame. Get the YUV data
-    th_ycbcr_buffer buffer;
-    ret = th_decode_ycbcr_out(stream->mTheora.mCtx, buffer);
+    int ret = th_decode_ycbcr_out(stream->mTheora.mCtx, buffer);
     assert(ret == 0);
+  }
 
+  if (packet != NULL) {
+    // The granulepos for a packet gives the time of the end of the
+    // display interval of the frame in the packet.  We keep the
+    // granulepos of the frame we've decoded and use this to know the
+    // time when to display the next frame.
+    int ret = th_decode_packetin(stream->mTheora.mCtx,
+                                 packet,
+                                 &mGranulepos);
+    // If the return code is TH_DUPFRAME then we don't need to
+    // get the YUV data and display it since it's the same as
+    // the previous frame.
+    assert(ret == 0 || ret == TH_DUPFRAME);
+  }
+
+  if (mVideoFrameQueued) {
     mDisplaySink->Show(buffer);
 
     gettimeofday(&mTimeStamp[mTimeStampPos++], NULL);
@@ -993,6 +999,7 @@ void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
       printf("%.1f/%.1f/%.1f FPS\n", minTime, 1000.0 / (frameTime / (elems - 1)), maxTime);
     }
   }
+  mVideoFrameQueued = packet != NULL;
 }
 
 bool OggDecoder::handle_vorbis_header(OggStream* stream, ogg_packet* packet) {
