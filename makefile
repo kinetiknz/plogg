@@ -27,7 +27,7 @@ plogg.o: plogg.cpp local/lib/libogg.so local/lib/libtheora.so local/lib/libvorbi
 	g++ -O3 -g -c $(INCLUDE) -Ilocal/include -I../gst-plugin-bc/module -o plogg.o plogg.cpp
 
 plogg: plogg.o 
-	g++ -O3 -g -o plogg plogg.o local/lib/libsydneyaudio.a -Llocal/lib -lvorbis -ltheoradec -logg -lSDL -lX11 -lEGL -lGLESv2 $(LIBS)
+	g++ -O3 -g -o plogg plogg.o local/lib/libsydneyaudio.a -Llocal/lib -lvorbis -ltheoradec -logg -lSDL -lX11 -lEGL -lGLESv2 $(LIBS) cmem.o470MV
 
 clean: 
 	rm *.o plogg

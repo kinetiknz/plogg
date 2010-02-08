@@ -29,6 +29,8 @@
 #define LINUX 1
 #include "bc_cat.h"
 #include <GLES2/gl2ext.h>
+// CMEM.
+#include "cmem.h"
 
 #define FRAG_CONV 0
 #define FRAG_CONV_REAL 1
@@ -579,21 +581,30 @@ private:
     // planar packed is single buf per frame, how would planar look?
     // doesn't matter - driver doesn't support it anyway
     param.pixel_fmt = PVRSRV_PIXEL_FORMAT_FOURCC_ORG_UYVY;
-    param.type = BC_MEMORY_MMAP;
+    param.type = BC_MEMORY_USERPTR;
     int r = ioctl(fd, BCIOREQ_BUFFERS, &param);
     assert(r >= 0);
 
     printf("BC setup: %d bufs of %dx%d (stride %d, size %d)\n",
 	   param.count, param.width, param.height, param.stride, param.size);
 
-    BCIO_package buf_param;
-    buf_param.input = 0;
-    r = ioctl(fd, BCIOGET_BUFFERPHYADDR, &buf_param);
+    r = CMEM_init();
     assert(r >= 0);
 
-    size_t size = w * h * 2;
-    void* p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf_param.output);
-    assert(p != MAP_FAILED);
+    CMEM_AllocParams cmem_params;
+    cmem_params.type = CMEM_HEAP;
+    cmem_params.flags = CMEM_NONCACHED;
+    cmem_params.alignment = 32;
+    void* p = CMEM_alloc(param.size, &cmem_params);
+    assert(p);
+
+    bc_buf_ptr_t phys_buf;
+    phys_buf.index = 0;
+    phys_buf.size = param.size;
+    phys_buf.pa = CMEM_getPhys(p);
+    r = ioctl(fd, BCIOSET_BUFFERPHYADDR, &phys_buf);
+    assert(r >= 0);
+
     mMappedTexture = p;
 
     GLubyte const* devname = glGetTexStreamDeviceNameIMG(0);
