@@ -33,6 +33,8 @@
 // CMEM.
 #include "cmem.h"
 
+#define CMEM 0
+
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
 PFNGLGETTEXSTREAMDEVICEATTRIBUTEIVIMGPROC glGetTexStreamDeviceAttributeivIMG;
@@ -610,13 +612,28 @@ private:
     // planar packed is single buf per frame, how would planar look?
     // doesn't matter - driver doesn't support it anyway
     param.pixel_fmt = PVRSRV_PIXEL_FORMAT_FOURCC_ORG_UYVY;
+#if !CMEM
+    param.type = BC_MEMORY_MMAP;
+#else
     param.type = BC_MEMORY_USERPTR;
+#endif
     int r = ioctl(fd, BCIOREQ_BUFFERS, &param);
     assert(r >= 0);
 
     printf("BC setup: %d bufs of %dx%d (stride %d, size %d)\n",
 	   param.count, param.width, param.height, param.stride, param.size);
 
+#if !CMEM
+    BCIO_package buf_param;
+    buf_param.input = 0;
+    r = ioctl(fd, BCIOGET_BUFFERPHYADDR, &buf_param);
+    assert(r >= 0);
+
+    size_t size = w * h * 2;
+    void* p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf_param.output);
+    assert(p != MAP_FAILED);
+    mMappedTexture = p;
+#else
     r = CMEM_init();
     assert(r >= 0);
 
@@ -635,6 +652,7 @@ private:
     assert(r >= 0);
 
     mMappedTexture = p;
+#endif
 
     GLubyte const* devname = glGetTexStreamDeviceNameIMG(0);
     printf("BC GL: devname=%s", devname);
