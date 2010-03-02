@@ -34,6 +34,7 @@
 #include "cmem.h"
 
 #define CMEM 0
+#define TEST_GETPHYS 0
 
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
@@ -633,16 +634,26 @@ private:
     void* p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf_param.output);
     assert(p != MAP_FAILED);
     mMappedTexture = p;
+
+#if TEST_GETPHYS
+    r = CMEM_init();
+    void *x = (void*)CMEM_getPhys(p);
+    fprintf(stderr, "%p %p %p\n", p, x, buf_param.output);
+#endif
 #else
+    fprintf(stderr, "b4 init\n"); sleep(1);
     r = CMEM_init();
     assert(r >= 0);
+    fprintf(stderr, "af init %d\n", r); sleep(1);
 
     CMEM_AllocParams cmem_params;
     cmem_params.type = CMEM_HEAP;
-    cmem_params.flags = CMEM_NONCACHED;
+    cmem_params.flags = CMEM_CACHED;
     cmem_params.alignment = 32;
     void* p = CMEM_alloc(param.size, &cmem_params);
     assert(p);
+
+    fprintf(stderr, "af alloc\n"); sleep(1);
 
     bc_buf_ptr_t phys_buf;
     phys_buf.index = 0;
@@ -650,6 +661,8 @@ private:
     phys_buf.pa = CMEM_getPhys(p);
     r = ioctl(fd, BCIOSET_BUFFERPHYADDR, &phys_buf);
     assert(r >= 0);
+
+    fprintf(stderr, "af setbuf\n"); sleep(1);
 
     mMappedTexture = p;
 #endif
