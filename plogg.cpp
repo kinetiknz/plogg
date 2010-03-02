@@ -158,7 +158,7 @@ typedef map<int, OggStream*> StreamMap;
 
 struct DisplaySink
 {
-  virtual void Show(th_ycbcr_buffer const& buffer) = 0;
+  virtual void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) = 0;
 };
 
 class SDL_DisplaySink : public DisplaySink
@@ -170,7 +170,7 @@ public:
   }
 
 
-  void Show(th_ycbcr_buffer const& buffer) {
+  void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) {
     if (!mSurface) {
       mSurface = SDL_SetVideoMode(buffer[0].width,
 				  buffer[0].height,
@@ -254,15 +254,17 @@ class GL_DisplaySink : public DisplaySink
 {
 public:
   GL_DisplaySink(int glMode) : mDisplay(0), mContext(0), mSurface(0), mMode(glMode), mMappedTexture(0) {
-    assert(mMode >= 0 && mMode <= 3);
+    assert(mMode >= 0 && mMode <= 4);
   }
 
-  void Show(th_ycbcr_buffer const& buffer) {
+  void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) {
     if (!mDisplay) {
       init_x11(buffer[0].width, buffer[0].height, true);
       init_gles();
       if (mMode == 3) {
-	setup_bcbufs(buffer[0].width, buffer[0].height);
+	setup_bcbufs(NULL, buffer[0].width, buffer[0].height);
+      } else if (mMode == 4) {
+	setup_bcbufs(dec, buffer[0].width, buffer[0].height);
       }
     }
 
@@ -282,6 +284,8 @@ public:
 	  p += 4;
 	}
       }
+    } else if (mMode == 4) {
+      memcpy(mMappedTexture, mUYVYBuffer, buffer[0].height * buffer[0].width * 2);
     } else {
       glActiveTexture(GL_TEXTURE0);
       bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
@@ -347,6 +351,7 @@ public:
       eglDestroySurface(mDisplay, mSurface);
       eglDestroyContext(mDisplay, mContext);
       eglTerminate(mDisplay);
+      delete []mUYVYBuffer;
     }
   }
 private:
@@ -509,7 +514,11 @@ private:
       "}\n"
     };
 
-    mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshaders[mMode]);
+    int mode = mMode;
+    if (mMode == 4) {
+      mode = 3;
+    }
+    mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshaders[mode]);
 
     mProgram = glCreateProgram();
     assert(mProgram);
@@ -529,7 +538,7 @@ private:
 
     glUseProgram(mProgram);
 
-    if (mMode == 3) {
+    if (mMode == 3 || mMode == 4) {
       glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
     } else {
       if (mMode == 1) {
@@ -588,7 +597,7 @@ private:
     }
   }
 
-  void setup_bcbufs(unsigned int w, unsigned int h) {
+  void setup_bcbufs(th_dec_ctx *dec, unsigned int w, unsigned int h) {
     GLubyte const* glExts = glGetString(GL_EXTENSIONS);
     assert(strstr((char const*) glExts, "GL_IMG_texture_stream"));
 
@@ -640,6 +649,12 @@ private:
     void *x = (void*)CMEM_getPhys(p);
     fprintf(stderr, "%p %p %p\n", p, x, buf_param.output);
 #endif
+
+    if (mMode == 4) {
+      mUYVYBuffer = new unsigned char[size];
+      thdsp_decode_set_uyvy_buffer(dec, mUYVYBuffer, w * 2, size);
+    }
+
 #else
     fprintf(stderr, "b4 init\n"); sleep(1);
     r = CMEM_init();
@@ -694,6 +709,7 @@ private:
   GLuint mProgram;
   GLuint mTextures[3];
   void* mMappedTexture;
+  unsigned char *mUYVYBuffer;
 };
 
 class Null_DisplaySink : public DisplaySink
@@ -703,7 +719,7 @@ public:
   }
 
 
-  void Show(th_ycbcr_buffer const& buffer) {
+  void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) {
   }
 
   virtual ~Null_DisplaySink() {
@@ -1048,7 +1064,7 @@ void OggDecoder::handle_theora_data(OggStream* stream, ogg_packet* packet) {
   }
 
   if (mVideoFrameQueued) {
-    mDisplaySink->Show(buffer);
+    mDisplaySink->Show(stream->mTheora.mCtx, buffer);
 
     gettimeofday(&mTimeStamp[mTimeStampPos++], NULL);
     size_t elems = sizeof(mTimeStamp) / sizeof(mTimeStamp[0]);
@@ -1101,6 +1117,7 @@ void usage() {
   cout << "      1      Use fragment shader v2." << endl;
   cout << "      2      Use fast (greyscale) fragment shader." << endl;
   cout << "      3      Use texture streaming." << endl;
+  cout << "      4      Use texture streaming with DSP swizzling." << endl;
   cout << "  -s       Use SDL render path. (default)" << endl;
   cout << "  -n       Use null render path." << endl;
   exit(1);
@@ -1115,7 +1132,7 @@ int main(int argc, char* argv[]) {
     case 'g': {
       printf("g %s\n", optarg);
       int glMode = atoi(optarg);
-      if (glMode < 0 || glMode > 3) {
+      if (glMode < 0 || glMode > 4) {
 	fprintf(stderr, "%s: invalid gl mode %d\n", argv[0], glMode);
 	usage();
       }
