@@ -5,6 +5,7 @@
 #include <map>
 #include <iostream>
 #include <fstream>
+#include <unistd.h>
 #include <ogg/ogg.h>
 #include <theora/theora.h>
 #include <theora/theoradec.h>
@@ -30,13 +31,15 @@
 #include "bc_cat.h"
 #include <GLES2/gl2ext.h>
 
-#define FRAG_CONV 0
-#define FRAG_CONV_REAL 1
-
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
 PFNGLGETTEXSTREAMDEVICEATTRIBUTEIVIMGPROC glGetTexStreamDeviceAttributeivIMG;
 
+static GLfloat const kYUV2RGB[9] = {
+  1.0, 1.0, 1.0,
+  0.0, -0.34414, 1.772,
+  1.402, -0.71414, 0.0
+};
 
 extern "C" {
 #include <sydney_audio.h>
@@ -245,45 +248,48 @@ private:
 class GL_DisplaySink : public DisplaySink
 {
 public:
-  GL_DisplaySink() : mDisplay(0), mContext(0), mSurface(0) {
+  GL_DisplaySink(int glMode) : mDisplay(0), mContext(0), mSurface(0), mMode(glMode), mMappedTexture(0) {
+    assert(mMode >= 0 && mMode <= 3);
   }
 
   void Show(th_ycbcr_buffer const& buffer) {
     if (!mDisplay) {
       init_x11(buffer[0].width, buffer[0].height, true);
       init_gles();
-      setup_bcbufs(buffer[0].width, buffer[0].height);
+      if (mMode == 3) {
+	setup_bcbufs(buffer[0].width, buffer[0].height);
+      }
     }
 
     struct timeval start, end, dt;
     gettimeofday(&start, NULL);
-#if FRAG_CONV
-    glActiveTexture(GL_TEXTURE0);
-    bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
-		 buffer[0].stride, buffer[0].data);
-
-    glActiveTexture(GL_TEXTURE1);
-    bind_texture(mTextures[1], buffer[1].width, buffer[1].height,
-		 buffer[1].stride, buffer[1].data);
-
-    glActiveTexture(GL_TEXTURE2);
-    bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
-		 buffer[2].stride, buffer[2].data);
-#else
-    unsigned char* p = (unsigned char*) mMappedTexture;
-    for (unsigned int i = 0; i < buffer[0].height; ++i) {
-      unsigned char* y = buffer[0].data + (i * buffer[0].stride);
-      unsigned char* u = buffer[1].data + (i / 2 * buffer[1].stride);
-      unsigned char* v = buffer[2].data + (i / 2 * buffer[2].stride);
-      for (unsigned int j = 0; j < buffer[0].width; j += 2) {
-	p[0] = u[j / 2];
-	p[1] = y[j];
-	p[2] = v[j / 2];
-	p[3] = y[j + 1];
-	p += 4;
+    if (mMode == 3) {
+      unsigned char* p = (unsigned char*) mMappedTexture;
+      for (unsigned int i = 0; i < buffer[0].height; ++i) {
+	unsigned char* y = buffer[0].data + (i * buffer[0].stride);
+	unsigned char* u = buffer[1].data + (i / 2 * buffer[1].stride);
+	unsigned char* v = buffer[2].data + (i / 2 * buffer[2].stride);
+	for (unsigned int j = 0; j < buffer[0].width; j += 2) {
+	  p[0] = u[j / 2];
+	  p[1] = y[j];
+	  p[2] = v[j / 2];
+	  p[3] = y[j + 1];
+	  p += 4;
+	}
       }
+    } else {
+      glActiveTexture(GL_TEXTURE0);
+      bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
+		   buffer[0].stride, buffer[0].data);
+
+      glActiveTexture(GL_TEXTURE1);
+      bind_texture(mTextures[1], buffer[1].width, buffer[1].height,
+		   buffer[1].stride, buffer[1].data);
+
+      glActiveTexture(GL_TEXTURE2);
+      bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
+		   buffer[2].stride, buffer[2].data);
     }
-#endif
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
     //printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
@@ -301,19 +307,19 @@ public:
 
     glEnableVertexAttribArray(0);
     GLfloat const vertices[] = {
-      -1.0, -1.0, 0.0,
-      1.0, -1.0, 0.0,
       -1.0, 1.0, 0.0,
-      1.0, 1.0, 0.0
+      -1.0, -1.0, 0.0,
+      1.0, 1.0, 0.0,
+      1.0, -1.0, 0.0
     };
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, vertices);
 
     glEnableVertexAttribArray(1);
     GLfloat const coords[] = {
-      0.0, 1.0,
-      1.0, 1.0,
       0.0, 0.0,
-      1.0, 0.0
+      0.0, 1.0,
+      1.0, 0.0,
+      1.0, 1.0
     };
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, coords);
 
@@ -453,37 +459,52 @@ private:
       "}\n";
     mVertexShader = compile_shader(GL_VERTEX_SHADER, vshader);
 
-#if FRAG_CONV
-    char const* fshader =
+    char const* fshaders[] = {
+      // Obvious colour conversion implementation.
       "uniform sampler2D ytx, utx, vtx;\n"
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
-      "lowp float y, u, v, r, g, b;\n"
-#if FRAG_CONV_REAL
-      "y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
-      "u = texture2D(utx, myTexCoord).r - 0.5;\n"
-      "v = texture2D(vtx, myTexCoord).r - 0.5;\n"
-      "r = y + 1.5958 * v;\n"
-      "g = y - 0.39173 * u - 0.8129 * v;\n"
-      "b = y + 2.017 * u;\n"
+      "lowp float y = (texture2D(ytx, myTexCoord).r - 0.0625) * 1.1643;\n"
+      "lowp float u = texture2D(utx, myTexCoord).r - 0.5;\n"
+      "lowp float v = texture2D(vtx, myTexCoord).r - 0.5;\n"
+      "lowp float r = y + 1.5958 * v;\n"
+      "lowp float g = y - 0.39173 * u - 0.8129 * v;\n"
+      "lowp float b = y + 2.017 * u;\n"
       "gl_FragColor = vec4(r, g, b, 1.0);\n"
-#else
-      "y = texture2D(ytx, myTexCoord).r;\n"
+      "}\n",
+
+      // Slightly optimized routine.
+      "uniform sampler2D ytx, utx, vtx;\n"
+      "uniform mediump mat3 yuv2rgb;\n"
+      "varying mediump vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "lowp vec3 yuv = vec3(texture2D(ytx, myTexCoord).x, texture2D(utx, myTexCoord).x, texture2D(vtx, myTexCoord).x);\n"
+      "yuv -= vec3(0.0, 0.5, 0.5);\n"
+      "gl_FragColor = vec4(yuv2rgb * yuv, 1.0);\n"
+      "}\n",
+
+      // Greyscale "fast" routine.
+      "uniform sampler2D ytx;\n"
+      "varying mediump vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "lowp float y = texture2D(ytx, myTexCoord).r;\n"
       "gl_FragColor = vec4(y, y, y, 1.0);\n"
-#endif
-      "}\n";
-#else
-    char const* fshader =
+      "}\n",
+
+      // Texture streaming.
       "#extension GL_IMG_texture_stream2 : enable\n"
       "uniform samplerStreamIMG tx;\n"
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
       "gl_FragColor = textureStreamIMG(tx, myTexCoord);\n"
-      "}\n";
-#endif
-    mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshader);
+      "}\n"
+    };
+
+    mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshaders[mMode]);
 
     mProgram = glCreateProgram();
     assert(mProgram);
@@ -503,16 +524,24 @@ private:
 
     glUseProgram(mProgram);
 
-#if FRAG_CONV
-    glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
-    glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
-    glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
+    if (mMode == 3) {
+      glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
+    } else {
+      if (mMode == 1) {
+	glUniformMatrix3fv(glGetUniformLocation(mProgram, "yuv2rgb"), 1, GL_FALSE, kYUV2RGB);
+      }
 
-    glGenTextures(3, mTextures);
-    assert(mTextures[0] && mTextures[1] && mTextures[2]);
-#else
-    glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
-#endif
+      glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
+      glGenTextures(1, &mTextures[0]);
+      assert(mTextures[0]);
+
+      if (mMode == 0 || mMode == 1) {
+	glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
+	glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
+	glGenTextures(2, &mTextures[1]);
+	assert(mTextures[1] && mTextures[2]);
+      }
+    }
   }
 
   GLuint compile_shader(GLenum type, char const* src) {
@@ -615,6 +644,8 @@ private:
   EGLDisplay mDisplay;
   EGLContext mContext;
   EGLSurface mSurface;
+
+  int mMode;
 
   GLuint mVertexShader;
   GLuint mFragmentShader;
@@ -1021,46 +1052,67 @@ bool OggDecoder::handle_vorbis_header(OggStream* stream, ogg_packet* packet) {
 }
 
 void usage() {
-  cout << "Usage: plogg [--gl | --null] <filename>" << endl;
+  cout << "Usage: plogg [options] filename" << endl;
+  cout << "Options:" << endl;
+  cout << "  -g <n>   Use OpenGL ES render path." << endl;
+  cout << "      0      Use fragment shader v1." << endl;
+  cout << "      1      Use fragment shader v2." << endl;
+  cout << "      2      Use fast (greyscale) fragment shader." << endl;
+  cout << "      3      Use texture streaming." << endl;
+  cout << "  -s       Use SDL render path. (default)" << endl;
+  cout << "  -n       Use null render path." << endl;
+  exit(1);
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2 || argc > 3) { 
-    usage();
-    return 0;
-  }
+  DisplaySink* sink = NULL;
+  int ch;
 
-  DisplaySink* sink;
-  char const* path;
-
-  if (argc == 3) {
-    if (strcmp(argv[1], "--gl") == 0) {
-      sink = new GL_DisplaySink;
-      path = argv[2];
-    } else if (strcmp(argv[1], "--null") == 0) {
+  while ((ch = getopt(argc, argv, "g:snh?")) != -1) {
+    switch (ch) {
+    case 'g': {
+      printf("g %s\n", optarg);
+      int glMode = atoi(optarg);
+      if (glMode < 0 || glMode > 3) {
+	fprintf(stderr, "%s: invalid gl mode %d\n", argv[0], glMode);
+	usage();
+      }
+      sink = new GL_DisplaySink(glMode);
+      break;
+    }
+    case 'n':
       sink = new Null_DisplaySink;
-      path = argv[2];
-    } else {
+      break;
+    case 's':
+      sink = new SDL_DisplaySink;
+      break;
+    case 'h':
+    case '?':
+    default:
       usage();
-      return 0;
     }
-  } else {
-    sink = new SDL_DisplaySink;
-    path = argv[1];
   }
 
-  ifstream file(path, ios::in | ios::binary);
-  if (file) {
-    OggDecoder decoder(sink);
-    decoder.play(file);
-    file.close();
-    for(StreamMap::iterator it = decoder.mStreams.begin();
-	it != decoder.mStreams.end();
-	++it) {
-      OggStream* stream = (*it).second;
-      delete stream;
-    }
+  if (!sink) {
+    sink = new SDL_DisplaySink;
   }
+
+  ifstream file(argv[optind], ios::in | ios::binary);
+  if (!file) {
+    fprintf(stderr, "%s: file error\n", argv[0]);
+    usage();
+  }
+
+  OggDecoder decoder(sink);
+  decoder.play(file);
+  file.close();
+  for(StreamMap::iterator it = decoder.mStreams.begin();
+      it != decoder.mStreams.end();
+      ++it) {
+    OggStream* stream = (*it).second;
+    delete stream;
+  }
+
   return 0;
 }
 // Copyright (C) 2009 Chris Double. All Rights Reserved.
