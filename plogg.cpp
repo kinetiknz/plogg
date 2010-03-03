@@ -33,6 +33,7 @@
 // CMEM.
 #include "cmem.h"
 
+#define UYVY_CPU_BUF 0
 #define CMEM 0
 #define TEST_GETPHYS 0
 
@@ -285,7 +286,9 @@ public:
 	}
       }
     } else if (mMode == 4) {
+#if UYVY_CPU_BUF
       memcpy(mMappedTexture, mUYVYBuffer, buffer[0].height * buffer[0].width * 2);
+#endif
     } else {
       glActiveTexture(GL_TEXTURE0);
       bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
@@ -351,7 +354,9 @@ public:
       eglDestroySurface(mDisplay, mSurface);
       eglDestroyContext(mDisplay, mContext);
       eglTerminate(mDisplay);
+#if UYVY_CPU_BUF
       delete []mUYVYBuffer;
+#endif
     }
   }
 private:
@@ -651,8 +656,12 @@ private:
 #endif
 
     if (mMode == 4) {
+#if UYVY_CPU_BUF
       mUYVYBuffer = new unsigned char[size];
       thdsp_decode_set_uyvy_buffer(dec, mUYVYBuffer, w * 2, size);
+#else
+      thdsp_decode_set_uyvy_buffer(dec, (unsigned char*)mMappedTexture, w * 2, size);
+#endif
     }
 
 #else
@@ -709,7 +718,9 @@ private:
   GLuint mProgram;
   GLuint mTextures[3];
   void* mMappedTexture;
+#if UYVY_CPU_BUF
   unsigned char *mUYVYBuffer;
+#endif
 };
 
 class Null_DisplaySink : public DisplaySink
