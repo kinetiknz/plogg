@@ -36,16 +36,11 @@
 #define UYVY_CPU_BUF 0
 #define CMEM 0
 #define TEST_GETPHYS 0
+#define SOUND 0
 
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
 PFNGLGETTEXSTREAMDEVICEATTRIBUTEIVIMGPROC glGetTexStreamDeviceAttributeivIMG;
-
-static GLfloat const kYUV2RGB[9] = {
-  1.0, 1.0, 1.0,
-  0.0, -0.34414, 1.772,
-  1.402, -0.71414, 0.0
-};
 
 extern "C" {
 #include <sydney_audio.h>
@@ -80,8 +75,10 @@ public:
   void initForData(OggStream* stream);
 
   ~TheoraDecode() {
-    th_setup_free(mSetup);
-    th_decode_free(mCtx);
+    if (mSetup)
+      th_setup_free(mSetup);
+    if (mCtx)
+      th_decode_free(mCtx);
   }   
 };
 
@@ -157,6 +154,15 @@ void VorbisDecode::initForData(OggStream* stream) {
 
 typedef map<int, OggStream*> StreamMap; 
 
+void make_hildon_leave_us_alone(Display * dpy, Window win)
+{
+  Atom atom = XInternAtom(dpy, "_HILDON_NON_COMPOSITED_WINDOW", False);
+  assert(atom);
+  long atomval = 1;
+  XChangeProperty(dpy, win, atom, XA_INTEGER, 32, PropModeReplace,
+                 (unsigned char*) &atomval, 1);
+}
+
 struct DisplaySink
 {
   virtual void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) = 0;
@@ -200,15 +206,9 @@ public:
       wins[2] = winfo.info.x11.wmwindow;
 
       for (int i = 0; i < 2; ++i) {
-	      for (int j = 0; j < 3; ++j) {
-		      Display* xdpy = dpys[i];
-		      Window xwin = wins[j];
-		      Atom xatom = XInternAtom(xdpy, "_HILDON_NON_COMPOSITED_WINDOW", False);
-		      assert(xatom);
-		      long atomval = 1;
-		      XChangeProperty(xdpy, xwin, xatom, XA_INTEGER, 32, PropModeReplace,
-				      (unsigned char*) &atomval, 1);
-	      }
+	for (int j = 0; j < 3; ++j) {
+	  make_hildon_leave_us_alone(dpys[i], wins[j]);
+	}
       }
     }
 
@@ -294,28 +294,29 @@ public:
       bind_texture(mTextures[0], buffer[0].width, buffer[0].height,
 		   buffer[0].stride, buffer[0].data);
 
-      glActiveTexture(GL_TEXTURE1);
-      bind_texture(mTextures[1], buffer[1].width, buffer[1].height,
-		   buffer[1].stride, buffer[1].data);
+      if (mMode != 2) {
+	glActiveTexture(GL_TEXTURE1);
+	bind_texture(mTextures[1], buffer[1].width, buffer[1].height,
+		     buffer[1].stride, buffer[1].data);
 
-      glActiveTexture(GL_TEXTURE2);
-      bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
-		   buffer[2].stride, buffer[2].data);
+	glActiveTexture(GL_TEXTURE2);
+	bind_texture(mTextures[2], buffer[2].width, buffer[2].height,
+		     buffer[2].stride, buffer[2].data);
+      }
     }
     gettimeofday(&end, NULL);
     timersub(&end, &start, &dt);
     //printf("%f\t", dt.tv_sec * 1000.0 + dt.tv_usec / 1000.0);
 
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    GLint loc = glGetUniformLocation(mProgram, "myPMVMatrix");
     GLfloat const identity[] = {
       1.0, 0.0, 0.0, 0.0,
       0.0, 1.0, 0.0, 0.0,
       0.0, 0.0, 1.0, 0.0,
       0.0, 0.0, 0.0, 1.0
     };
-    glUniformMatrix4fv(loc, 1, GL_FALSE, identity);
+    glUniformMatrix4fv(mLocation, 1, GL_FALSE, identity);
 
     glEnableVertexAttribArray(0);
     GLfloat const vertices[] = {
@@ -397,11 +398,7 @@ private:
       XChangeProperty(xdpy, xwin, xatom, XA_ATOM, 32, PropModeReplace,
 		      (unsigned char*) &xstate, 1);
 
-      xatom = XInternAtom(xdpy, "_HILDON_NON_COMPOSITED_WINDOW", False);
-      assert(xatom);
-      long atomval = 1;
-      XChangeProperty(xdpy, xwin, xatom, XA_INTEGER, 32, PropModeReplace,
-		      (unsigned char*) &atomval, 1);
+      make_hildon_leave_us_alone(xdpy, xwin);
     }
 
     XMapWindow(xdpy, xwin);
@@ -462,6 +459,12 @@ private:
     GLubyte const* glExts = glGetString(GL_EXTENSIONS);
     assert(strstr((char const*) glExts, "GL_IMG_texture_npot"));
 
+    printf("vendor: %s\n", glGetString(GL_VENDOR));
+    printf("renderer: %s\n", glGetString(GL_RENDERER));
+    printf("version: %s\n", glGetString(GL_VERSION));
+    printf("shading language version: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
+    printf("extensions: %s\n", glGetString(GL_EXTENSIONS));
+
     char const* vshader =
       "attribute vec4 myVertex;\n"
       "attribute vec4 myUV;\n"
@@ -505,8 +508,7 @@ private:
       "varying mediump vec2 myTexCoord;\n"
       "void main()\n"
       "{\n"
-      "lowp float y = texture2D(ytx, myTexCoord).r;\n"
-      "gl_FragColor = vec4(y, y, y, 1.0);\n"
+      "gl_FragColor = texture2D(ytx, myTexCoord);\n"
       "}\n",
 
       // Texture streaming.
@@ -543,11 +545,18 @@ private:
 
     glUseProgram(mProgram);
 
+    mLocation = glGetUniformLocation(mProgram, "myPMVMatrix");
+
     if (mMode == 3 || mMode == 4) {
       glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
     } else {
       if (mMode == 1) {
-	glUniformMatrix3fv(glGetUniformLocation(mProgram, "yuv2rgb"), 1, GL_FALSE, kYUV2RGB);
+	static GLfloat const yuv2rgb[] = {
+	  1.0, 1.0, 1.0,
+	  0.0, -0.34414, 1.772,
+	  1.402, -0.71414, 0.0
+	};
+	glUniformMatrix3fv(glGetUniformLocation(mProgram, "yuv2rgb"), 1, GL_FALSE, yuv2rgb);
       }
 
       glUniform1i(glGetUniformLocation(mProgram, "ytx"), 0);
@@ -590,6 +599,10 @@ private:
 
     // This would be nice to use if it existed in GLES.
     //    glPixelStorei(GL_UNPACK_ROW_LENGTH, buffer[1].stride);
+
+    // We could use glPixelStorei(GL_UNPACK_ALIGNMENT), but it seems
+    // like most Theora frames have more than 16-32 bytes of extra
+    // stride.
 
     // But it doesn't, so we have to upload row-by-row, accounting for
     // the stride ourselves.
@@ -716,6 +729,7 @@ private:
   GLuint mVertexShader;
   GLuint mFragmentShader;
   GLuint mProgram;
+  GLuint mLocation;
   GLuint mTextures[3];
   void* mMappedTexture;
 #if UYVY_CPU_BUF
@@ -777,6 +791,12 @@ public:
       sa_stream_drain(mAudio);
       sa_stream_destroy(mAudio);
     }
+
+    for(StreamMap::iterator it = mStreams.begin(); it != mStreams.end(); ++it) {
+      OggStream* stream = (*it).second;
+      delete stream;
+    }
+
     delete mDisplaySink;
   }
   void play(istream& stream);
@@ -961,9 +981,11 @@ void OggDecoder::play(istream& is) {
 	      *p++ = v;
 	    }
 	  }
-	  
+
+#if SOUND	  
           ret = sa_stream_write(mAudio, buffer, sizeof(*buffer)*size);
 	  assert(ret == SA_SUCCESS);
+#endif
           delete[] buffer;
 	}
 	
@@ -987,6 +1009,7 @@ void OggDecoder::play(istream& is) {
       // to the audio the user is hearing.
       //
       if (video) {
+#if SOUND
 	ogg_int64_t position = 0;
         sa_position_t positionType = SA_POSITION_WRITE_SOFTWARE;
 #if defined(WIN32)
@@ -999,8 +1022,12 @@ void OggDecoder::play(istream& is) {
 	  float(audio->mVorbis.mInfo.rate) /
 	  float(audio->mVorbis.mInfo.channels) /
 	  sizeof(short);
+#endif
 
 	float video_time = th_granule_time(video->mTheora.mCtx, mGranulepos);
+#if !SOUND
+	float audio_time = video_time + 1;
+#endif
 	if (audio_time > video_time) {
 	  // Decode one frame and display it. If no frame is available we
 	  // don't do anything.
@@ -1141,7 +1168,6 @@ int main(int argc, char* argv[]) {
   while ((ch = getopt(argc, argv, "g:snh?")) != -1) {
     switch (ch) {
     case 'g': {
-      printf("g %s\n", optarg);
       int glMode = atoi(optarg);
       if (glMode < 0 || glMode > 4) {
 	fprintf(stderr, "%s: invalid gl mode %d\n", argv[0], glMode);
@@ -1176,12 +1202,6 @@ int main(int argc, char* argv[]) {
   OggDecoder decoder(sink);
   decoder.play(file);
   file.close();
-  for(StreamMap::iterator it = decoder.mStreams.begin();
-      it != decoder.mStreams.end();
-      ++it) {
-    OggStream* stream = (*it).second;
-    delete stream;
-  }
 
   return 0;
 }
