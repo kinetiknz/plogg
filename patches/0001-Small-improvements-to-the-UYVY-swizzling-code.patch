@@ -1,0 +1,242 @@
+>From 4dfcd0da15d725462e8138667951ccf55b667350 Mon Sep 17 00:00:00 2001
+From: Timothy B. Terriberry <tterribe@xiph.org>
+Date: Fri, 15 Jan 2010 16:17:26 -0500
+Subject: [PATCH] Small improvements to the UYVY swizzling code.
+
+---
+ dsp/theoradec.c |  132 ++++++++++++++++++++++++++++---------------------------
+ 1 files changed, 67 insertions(+), 65 deletions(-)
+
+diff --git a/dsp/theoradec.c b/dsp/theoradec.c
+index 574e282..3650add 100644
+--- a/dsp/theoradec.c
++++ b/dsp/theoradec.c
+@@ -65,18 +65,19 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+     case TH_PF_420:{
+       u+=(y0>>1)*ustride;
+       v+=(y0>>1)*vstride;
+-#pragma MUST_ITERATE(4,,2)
++#pragma MUST_ITERATE(4,,4)
+       for(i=y0;i<yend;i+=2){
+-#pragma MUST_ITERATE(2)
++        /*0.875 cycles/pixel.*/
++#pragma MUST_ITERATE(2,,2)
+         for(j=0;j<nhblocks;j++){
+           long long y1;
+           long long y2;
+           int       u1;
+           int       v1;
+-          int       uv1a;
+-          int       uv2a;
+-          int       uv1b;
+-          int       uv2b;
++          int       uv0;
++          int       uv1;
++          int       uv2;
++          int       uv3;
+           int       ya;
+           int       yb;
+           int       yc;
+@@ -85,7 +86,6 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+           int       yf;
+           int       yg;
+           int       yh;
+-          int       x;
+           /*y7 y6 y5 y4 y3 y2 y1 y0*/
+           y1=_amem8_const(y+j*8);
+           /*yf ye yd yc yb ya y9 y8*/
+@@ -95,35 +95,33 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+           /*v3 v2 v1 v0*/
+           v1=_amem4_const(v+j*4);
+           /*v1 v0 u1 u0*/
+-          uv1a=_pack2(v1,u1);
+-          uv1b=uv1a>>8;
++          uv1=_pack2(v1,u1);
++          /*. v0 . u0*/
++          uv0=uv1&0xFF00FF;
++          /*. v1 . u1*/
++          uv1=uv1-uv0>>8;
+           /*v3 v2 u3 u2*/
+-          uv2a=_packh2(v1,u1);
+-          uv2b=uv2a>>8;
++          uv3=_packh2(v1,u1);
++          /*. v2 . u2*/
++          uv2=uv3&0xFF00FF;
++          /*. v3 . u3*/
++          uv3=uv3-uv2>>8;
+           /*y1 v0 y0 u0*/
+-          x=_unpklu4(_loll(y1));
+-          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          ya=(_unpklu4(_loll(y1))<<8)+uv0;
+           /*y3 v1 y2 u1*/
+-          x=_unpkhu4(_loll(y1));
+-          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          yb=(_unpkhu4(_loll(y1))<<8)+uv1;
+           /*y5 v2 y4 u2*/
+-          x=_unpklu4(_hill(y1));
+-          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          yc=(_unpklu4(_hill(y1))<<8)+uv2;
+           /*y7 v3 y6 u3*/
+-          x=_unpkhu4(_hill(y1));
+-          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          yd=(_unpkhu4(_hill(y1))<<8)+uv3;
+           /*y9 v0 y8 u0*/
+-          x=_unpklu4(_loll(y2));
+-          ye=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          ye=(_unpklu4(_loll(y2))<<8)+uv0;
+           /*yb v1 ya u1*/
+-          x=_unpkhu4(_loll(y2));
+-          yf=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          yf=(_unpkhu4(_loll(y2))<<8)+uv1;
+           /*yd v2 yc u2*/
+-          x=_unpklu4(_hill(y2));
+-          yg=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          yg=(_unpklu4(_hill(y2))<<8)+uv2;
+           /*yf v3 ye u3*/
+-          x=_unpkhu4(_hill(y2));
+-          yh=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          yh=(_unpkhu4(_hill(y2))<<8)+uv3;
+           _amem8(d+j*16)=_itoll(yb,ya);
+           _amem8(d+j*16+8)=_itoll(yd,yc);
+           _amem8(d+dstride+j*16)=_itoll(yf,ye);
+@@ -138,22 +136,22 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+     case TH_PF_422:{
+       u+=y0*ustride;
+       v+=y0*vstride;
+-#pragma MUST_ITERATE(16)
++#pragma MUST_ITERATE(8,,8)
+       for(i=y0;i<yend;i++){
+-#pragma MUST_ITERATE(2)
++        /*1.5 cycles/pixel.*/
++#pragma MUST_ITERATE(2,,2)
+         for(j=0;j<nhblocks;j++){
+           long long y1;
+           int       u1;
+           int       v1;
+-          int       uv1a;
+-          int       uv1b;
+-          int       uv2a;
+-          int       uv2b;
++          int       uv0;
++          int       uv1;
++          int       uv2;
++          int       uv3;
+           int       ya;
+           int       yb;
+           int       yc;
+           int       yd;
+-          int       x;
+           /*y7 y6 y5 y4 y3 y2 y1 y0*/
+           y1=_amem8_const(y+j*8);
+           /*u3 u2 u1 u0*/
+@@ -161,23 +159,25 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+           /*v3 v2 v1 v0*/
+           v1=_amem4_const(v+j*4);
+           /*v1 v0 u1 u0*/
+-          uv1a=_pack2(v1,u1);
+-          uv1b=uv1a>>8;
++          uv0=_pack2(v1,u1);
++          /*. v1 . u1*/
++          uv1=(uv0>>8)&0xFF00FF;
++          /*. v0 . u0*/
++          uv0&=0xFF00FF;
+           /*v3 v2 u3 u2*/
+-          uv2a=_packh2(v1,u1);
+-          uv2b=uv2a>>8;
++          uv2=_packh2(v1,u1);
++          /*. v3 . u3*/
++          uv3=(uv2>>8)&0xFF00FF;
++          /*. v2 . u2*/
++          uv2&=0xFF00FF;
+           /*y1 v0 y0 u0*/
+-          x=_unpklu4(_loll(y1));
+-          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          ya=(_unpklu4(_loll(y1))<<8)+uv0;
+           /*y3 v1 y2 u1*/
+-          x=_unpkhu4(_loll(y1));
+-          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          yb=(_unpkhu4(_loll(y1))<<8)+uv1;
+           /*y5 v2 y4 u2*/
+-          x=_unpklu4(_hill(y1));
+-          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          yc=(_unpklu4(_hill(y1))<<8)+uv2;
+           /*y7 v3 y6 u3*/
+-          x=_unpkhu4(_hill(y1));
+-          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          yd=(_unpkhu4(_hill(y1))<<8)+uv3;
+           _amem8(d+j*16)=_itoll(yb,ya);
+           _amem8(d+j*16+8)=_itoll(yd,yc);
+         }
+@@ -190,24 +190,24 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+     case TH_PF_444:{
+       u+=y0*ustride;
+       v+=y0*vstride;
+-#pragma MUST_ITERATE(16)
++#pragma MUST_ITERATE(8,,8)
+       for(i=y0;i<yend;i++){
+-#pragma MUST_ITERATE(2)
++        /*2.25 cycles/pixel.*/
++#pragma MUST_ITERATE(2,,2)
+         for(j=0;j<nhblocks;j++){
+           long long y1;
+           long long u12;
+           long long v12;
+           int       u1;
+           int       v1;
+-          int       uv1a;
+-          int       uv1b;
+-          int       uv2a;
+-          int       uv2b;
++          int       uv0;
++          int       uv1;
++          int       uv2;
++          int       uv3;
+           int       ya;
+           int       yb;
+           int       yc;
+           int       yd;
+-          int       x;
+           /*y7 y6 y5 y4 y3 y2 y1 y0*/
+           y1=_amem8_const(y+j*8);
+           u12=_amem8_const(u+j*8);
+@@ -219,23 +219,25 @@ theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
+           v1=_avgu4(_packl4(_hill(v12),_loll(v12)),
+            _packh4(_hill(v12),_loll(v12)));
+           /*v1 v0 u1 u0*/
+-          uv1a=_pack2(v1,u1);
+-          uv1b=uv1a>>8;
++          uv1=_pack2(v1,u1);
++          /*. v0 . u0*/
++          uv0=uv1&0xFF00FF;
++          /*. v1 . u1*/
++          uv1=uv1-uv0>>8;
+           /*v3 v2 u3 u2*/
+-          uv2a=_packh2(v1,u1);
+-          uv2b=uv2a>>8;
++          uv3=_packh2(v1,u1);
++          /*. v2 . u2*/
++          uv2=uv3&0xFF00FF;
++          /*. v3 . u3*/
++          uv3=uv3-uv2>>8;
+           /*y1 v0 y0 u0*/
+-          x=_unpklu4(_loll(y1));
+-          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          ya=(_unpklu4(_loll(y1))<<8)+uv0;
+           /*y3 v1 y2 u1*/
+-          x=_unpkhu4(_loll(y1));
+-          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          yb=(_unpkhu4(_loll(y1))<<8)+uv1;
+           /*y5 v2 y4 u2*/
+-          x=_unpklu4(_hill(y1));
+-          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          yc=(_unpklu4(_hill(y1))<<8)+uv2;
+           /*y7 v3 y6 u3*/
+-          x=_unpkhu4(_hill(y1));
+-          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          yd=(_unpkhu4(_hill(y1))<<8)+uv3;
+           _amem8(d+j*16)=_itoll(yb,ya);
+           _amem8(d+j*16+8)=_itoll(yd,yc);
+         }
+-- 
+1.6.4.4
+

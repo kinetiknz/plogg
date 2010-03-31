@@ -1,0 +1,419 @@
+>From ab30756c0e3ef53a9fbd5e925bca471f7cfab8e3 Mon Sep 17 00:00:00 2001
+From: Timothy B. Terriberry <tterribe@xiph.org>
+Date: Thu, 14 Jan 2010 21:43:54 -0500
+Subject: [PATCH] Add support for specifying a UYUV buffer for output, rather than using the
+  normal planar Y'CbCr output.
+ This is targeted towards TI's bc_cat kernel module for OpenGL ES texture
+  streaming, which can use this output directly.
+ This is just an initial version for testing purposes.
+
+---
+ dsp/theoradec.c            |  230 ++++++++++++++++++++++++++++++++++++++++++++
+ include/theora/theoradec.h |    3 +-
+ lib/Version_script-dec     |    1 +
+ lib/dsp.c                  |   51 +++++++++-
+ lib/theoradsp.h            |    2 +-
+ 5 files changed, 279 insertions(+), 8 deletions(-)
+
+diff --git a/dsp/theoradec.c b/dsp/theoradec.c
+index e991a65..574e282 100644
+--- a/dsp/theoradec.c
++++ b/dsp/theoradec.c
+@@ -29,6 +29,225 @@ theoradec_create (int argLength, char * argData, int numInStreams,
+   return DSPBRIDGE_OK;
+ }
+ 
++static void
++theoradec_uyvy_swizzle(void *_ctx,th_ycbcr_buffer _buf,
++   int _yfrag0,int _yfrag_end)
++{
++  TheoraDSPShared     *control;
++  const unsigned char *y;
++  const unsigned char *u;
++  const unsigned char *v;
++  unsigned char       *d;
++  int                  ystride;
++  int                  ustride;
++  int                  vstride;
++  int                  dstride;
++  int                  nhblocks;
++  int                  y0;
++  int                  yend;
++  int                  i;
++  int                  j;
++  control=(TheoraDSPShared *)_ctx;
++  nhblocks=_buf[0].width>>3;
++  y=_buf[0].data;
++  ystride=_buf[0].stride;
++  u=_buf[1].data;
++  ustride=_buf[1].stride;
++  v=_buf[2].data;
++  vstride=_buf[2].stride;
++  d=control->frame_map;
++  dstride=control->frame_stride;
++  y0=_yfrag0<<3;
++  yend=_yfrag_end<<3;
++  y+=y0*ystride;
++  d+=y0*dstride;
++  switch(control->info.pixel_fmt){
++    case TH_PF_420:{
++      u+=(y0>>1)*ustride;
++      v+=(y0>>1)*vstride;
++#pragma MUST_ITERATE(4,,2)
++      for(i=y0;i<yend;i+=2){
++#pragma MUST_ITERATE(2)
++        for(j=0;j<nhblocks;j++){
++          long long y1;
++          long long y2;
++          int       u1;
++          int       v1;
++          int       uv1a;
++          int       uv2a;
++          int       uv1b;
++          int       uv2b;
++          int       ya;
++          int       yb;
++          int       yc;
++          int       yd;
++          int       ye;
++          int       yf;
++          int       yg;
++          int       yh;
++          int       x;
++          /*y7 y6 y5 y4 y3 y2 y1 y0*/
++          y1=_amem8_const(y+j*8);
++          /*yf ye yd yc yb ya y9 y8*/
++          y2=_amem8_const(y+ystride+j*8);
++          /*u3 u2 u1 u0*/
++          u1=_amem4_const(u+j*4);
++          /*v3 v2 v1 v0*/
++          v1=_amem4_const(v+j*4);
++          /*v1 v0 u1 u0*/
++          uv1a=_pack2(v1,u1);
++          uv1b=uv1a>>8;
++          /*v3 v2 u3 u2*/
++          uv2a=_packh2(v1,u1);
++          uv2b=uv2a>>8;
++          /*y1 v0 y0 u0*/
++          x=_unpklu4(_loll(y1));
++          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          /*y3 v1 y2 u1*/
++          x=_unpkhu4(_loll(y1));
++          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          /*y5 v2 y4 u2*/
++          x=_unpklu4(_hill(y1));
++          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          /*y7 v3 y6 u3*/
++          x=_unpkhu4(_hill(y1));
++          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          /*y9 v0 y8 u0*/
++          x=_unpklu4(_loll(y2));
++          ye=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          /*yb v1 ya u1*/
++          x=_unpkhu4(_loll(y2));
++          yf=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          /*yd v2 yc u2*/
++          x=_unpklu4(_hill(y2));
++          yg=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          /*yf v3 ye u3*/
++          x=_unpkhu4(_hill(y2));
++          yh=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          _amem8(d+j*16)=_itoll(yb,ya);
++          _amem8(d+j*16+8)=_itoll(yd,yc);
++          _amem8(d+dstride+j*16)=_itoll(yf,ye);
++          _amem8(d+dstride+j*16+8)=_itoll(yh,yg);
++        }
++        d+=dstride*2;
++        y+=ystride*2;
++        u+=ustride;
++        v+=vstride;
++      }
++    }break;
++    case TH_PF_422:{
++      u+=y0*ustride;
++      v+=y0*vstride;
++#pragma MUST_ITERATE(16)
++      for(i=y0;i<yend;i++){
++#pragma MUST_ITERATE(2)
++        for(j=0;j<nhblocks;j++){
++          long long y1;
++          int       u1;
++          int       v1;
++          int       uv1a;
++          int       uv1b;
++          int       uv2a;
++          int       uv2b;
++          int       ya;
++          int       yb;
++          int       yc;
++          int       yd;
++          int       x;
++          /*y7 y6 y5 y4 y3 y2 y1 y0*/
++          y1=_amem8_const(y+j*8);
++          /*u3 u2 u1 u0*/
++          u1=_amem4_const(u+j*4);
++          /*v3 v2 v1 v0*/
++          v1=_amem4_const(v+j*4);
++          /*v1 v0 u1 u0*/
++          uv1a=_pack2(v1,u1);
++          uv1b=uv1a>>8;
++          /*v3 v2 u3 u2*/
++          uv2a=_packh2(v1,u1);
++          uv2b=uv2a>>8;
++          /*y1 v0 y0 u0*/
++          x=_unpklu4(_loll(y1));
++          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          /*y3 v1 y2 u1*/
++          x=_unpkhu4(_loll(y1));
++          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          /*y5 v2 y4 u2*/
++          x=_unpklu4(_hill(y1));
++          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          /*y7 v3 y6 u3*/
++          x=_unpkhu4(_hill(y1));
++          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          _amem8(d+j*16)=_itoll(yb,ya);
++          _amem8(d+j*16+8)=_itoll(yd,yc);
++        }
++        d+=dstride;
++        y+=ystride;
++        u+=ustride;
++        v+=vstride;
++      }
++    }break;
++    case TH_PF_444:{
++      u+=y0*ustride;
++      v+=y0*vstride;
++#pragma MUST_ITERATE(16)
++      for(i=y0;i<yend;i++){
++#pragma MUST_ITERATE(2)
++        for(j=0;j<nhblocks;j++){
++          long long y1;
++          long long u12;
++          long long v12;
++          int       u1;
++          int       v1;
++          int       uv1a;
++          int       uv1b;
++          int       uv2a;
++          int       uv2b;
++          int       ya;
++          int       yb;
++          int       yc;
++          int       yd;
++          int       x;
++          /*y7 y6 y5 y4 y3 y2 y1 y0*/
++          y1=_amem8_const(y+j*8);
++          u12=_amem8_const(u+j*8);
++          v12=_amem8_const(v+j*8);
++          /*u3 u2 u1 u0*/
++          u1=_avgu4(_packl4(_hill(u12),_loll(u12)),
++           _packh4(_hill(u12),_loll(u12)));
++          /*v3 v2 v1 v0*/
++          v1=_avgu4(_packl4(_hill(v12),_loll(v12)),
++           _packh4(_hill(v12),_loll(v12)));
++          /*v1 v0 u1 u0*/
++          uv1a=_pack2(v1,u1);
++          uv1b=uv1a>>8;
++          /*v3 v2 u3 u2*/
++          uv2a=_packh2(v1,u1);
++          uv2b=uv2a>>8;
++          /*y1 v0 y0 u0*/
++          x=_unpklu4(_loll(y1));
++          ya=_packl4(_packh2(x,uv1a),_pack2(x,uv1a));
++          /*y3 v1 y2 u1*/
++          x=_unpkhu4(_loll(y1));
++          yb=_packl4(_packh2(x,uv1b),_pack2(x,uv1b));
++          /*y5 v2 y4 u2*/
++          x=_unpklu4(_hill(y1));
++          yc=_packl4(_packh2(x,uv2a),_pack2(x,uv2a));
++          /*y7 v3 y6 u3*/
++          x=_unpkhu4(_hill(y1));
++          yd=_packl4(_packh2(x,uv2b),_pack2(x,uv2b));
++          _amem8(d+j*16)=_itoll(yb,ya);
++          _amem8(d+j*16+8)=_itoll(yd,yc);
++        }
++        d+=dstride;
++        y+=ystride;
++        u+=ustride;
++        v+=vstride;
++      }
++    }break;
++  }
++}
++
+ unsigned int
+ theoradec_execute (NODE_EnvPtr env)
+ {
+@@ -76,11 +295,22 @@ theoradec_execute (NODE_EnvPtr env)
+       case THEORADSP_PACKETIN:
+         {
+           ogg_packet packet;
++          th_stripe_callback cb;
+ 
+           packet.packet = (void *)msg.arg1;
+           packet.bytes = msg.arg2;
+           BCACHE_inv(packet.packet, packet.bytes, 1);
+ 
++          if (control->frame_map != NULL) {
++            cb.ctx = control;
++            cb.stripe_decoded = theoradec_uyvy_swizzle;
++          }
++          else {
++            cb.ctx = NULL;
++            cb.stripe_decoded = NULL;
++          }
++          th_decode_ctl (ctx, TH_DECCTL_SET_STRIPE_CB, &cb, sizeof(cb));
++
+           th_decode_packetin (ctx, &packet, NULL);
+           ret = th_decode_ycbcr_out (ctx, control->ycbcr);
+           BCACHE_wbAll ();
+diff --git a/include/theora/theoradec.h b/include/theora/theoradec.h
+index b20f0e3..f5759fb 100644
+--- a/include/theora/theoradec.h
++++ b/include/theora/theoradec.h
+@@ -316,7 +316,8 @@ extern void th_decode_free(th_dec_ctx *_dec);
+ /*@}*/
+ /*@}*/
+ 
+-
++extern int thdsp_decode_set_uyvy_buffer(th_dec_ctx *_dec,
++ unsigned char *_uyvy,int _stride,size_t _size);
+ 
+ #if defined(__cplusplus)
+ }
+diff --git a/lib/Version_script-dec b/lib/Version_script-dec
+index e62d4ce..5510961 100644
+--- a/lib/Version_script-dec
++++ b/lib/Version_script-dec
+@@ -38,6 +38,7 @@ libtheoradec_1.0
+ 
+ 		thdsp_decode_alloc;
+ 		thdsp_decode_free;
++		thdsp_decode_set_uyvy_buffer;
+ 		thdsp_decode_packetin;
+ 		thdsp_decode_ycbcr_out;
+ 	local:
+diff --git a/lib/dsp.c b/lib/dsp.c
+index 8f1191e..315e93a 100644
+--- a/lib/dsp.c
++++ b/lib/dsp.c
+@@ -42,6 +42,11 @@ struct thdsp_dec_ctx {
+   dmm_buffer_t *control_buffer;
+   size_t control_used;
+ 
++  unsigned char *uyvy_buffer_data;
++  int uyvy_buffer_stride;
++  dmm_buffer_t *uyvy_buffer;
++  size_t uyvy_buffer_sz;
++
+   int cmd;
+   int have_ycbcr;
+   th_ycbcr_buffer ycbcr;
+@@ -141,6 +146,7 @@ th_decode_alloc(const th_info *_info,
+   dec->control->heap_offset = 0;
+   heap_alloc (dec->control, sizeof(TheoraDSPShared));
+   dec->in_buffer_data = heap_alloc (dec->control, IN_BUFFER_SIZE);
++  dec->control->frame_map = NULL;
+ 
+   memcpy (&dec->control->info, _info, sizeof(*_info));
+   dec->control->setup_packet = heap_alloc (dec->control, _setup->op_bytes);
+@@ -198,6 +204,32 @@ th_decode_alloc(const th_info *_info,
+   return (th_dec_ctx *)dec;
+ }
+ 
++int thdsp_decode_set_uyvy_buffer(th_dec_ctx *_dec,
++ unsigned char *_uyvy,int _stride,size_t _size)
++{
++  thdsp_dec_ctx *dec = (thdsp_dec_ctx *)_dec;
++  if (dec->uyvy_buffer != NULL) {
++    dmm_buffer_unmap (dec->uyvy_buffer);
++    dmm_buffer_free (dec->uyvy_buffer);
++    dec->uyvy_buffer = NULL;
++    dec->control->frame_map = NULL;
++  }
++  if (_uyvy != NULL) {
++    /* the shared buffer containing the uyvy output buffer */
++    dec->uyvy_buffer = dmm_buffer_new (dec->dsp_handle, dec->proc);
++    if (dec->uyvy_buffer == NULL) {
++      fprintf(stderr, "leonora: Failed to create UYVY buffer\n");
++      return TH_EFAULT;
++    }
++    dmm_buffer_use (dec->uyvy_buffer, _uyvy, _size);
++    dmm_buffer_map (dec->uyvy_buffer);
++    dec->control->frame_map = dec->uyvy_buffer->map;
++    dec->control->frame_stride = _stride;
++    dsp_flush (dec->dsp_handle, dec->proc,
++        dec->control, sizeof(TheoraDSPShared), 0);
++  }
++}
++
+ /*Wait for a reply from any previously issued asynchronous commands.*/
+ static int
+ th_dsp_finish_cmd(thdsp_dec_ctx *_dec)
+@@ -231,7 +263,7 @@ th_decode_free(th_dec_ctx *_dec)
+   msg.cmd = THEORADSP_QUIT;
+   dsp_node_put_message (dec->dsp_handle, dec->node, &msg, -1);
+   dsp_node_get_message (dec->dsp_handle, dec->node, &msg, -1);
+-
++  thdsp_decode_set_uyvy_buffer(_dec, NULL, 0, 0);
+   if (dec->control_buffer) {
+     dmm_buffer_unmap (dec->control_buffer);
+     dmm_buffer_free (dec->control_buffer);
+@@ -289,7 +321,7 @@ th_decode_packetin(th_dec_ctx *_dec, const ogg_packet *_op,
+       fprintf(stderr, "leonora: dsp_flush failed line %d\n", __LINE__);
+     }
+ 
+-    th_dsp_finish_cmd(_dec);
++    th_dsp_finish_cmd(dec);
+     msg.cmd = THEORADSP_PACKETIN;
+     msg.arg_1 = (int)UPLOAD_PTR(dec->control, dec->in_buffer_data);
+     msg.arg_2 = _op->bytes;
+@@ -339,20 +371,27 @@ th_decode_ycbcr_out(th_dec_ctx *_dec, th_ycbcr_buffer _ycbcr)
+   if(_dec==NULL||_ycbcr==NULL)return TH_EFAULT;
+ 
+   if (!dec->have_ycbcr) {
+-    /*This invalidates much more than we really need to, which is expensive
++    size_t invalidate_size;
++    /*This may invalidate much more than we really need to, which is expensive
+        (the time to invalidate seems to be proportional to the size of the
+        region, not the size of the cache, as one might think), but we can do
+        this _before_ we retrieve the buffer pointers, in parallel with the
+        actual decoding DSP-side.
+       We could instead try to track which buffer we're _going_ to use and
+        pass that back from the DSP, but that requires duplicating internal
+-       libtheora logic and is much more fragile.*/
++       libtheora logic and is much more fragile.
++      If a UYVY buffer has been specified, we only bother invalidating the
++       control structure, as it is expected that buffer is the one that will
++       actually be used (and not by the host CPU, so it should not need
++       invalidation itself).*/
++    invalidate_size = dec->uyvy_buffer != NULL ?
++        sizeof(TheoraDSPShared) : dec->control_used;
+     ret = dsp_invalidate (dec->dsp_handle, dec->proc,
+-        dec->control, dec->control_used);
++        dec->control, invalidate_size);
+     if (!ret) {
+       fprintf(stderr, "leonora: dsp_invalidate failed line %d\n", __LINE__);
+     }
+-    ret = th_dsp_finish_cmd(_dec);
++    ret = th_dsp_finish_cmd(dec);
+ 
+     memcpy (dec->ycbcr, dec->control->ycbcr, 3 * sizeof(*dec->ycbcr));
+     dec->ycbcr[0].data = DOWNLOAD_PTR (dec, dec->ycbcr[0].data);
+diff --git a/lib/theoradsp.h b/lib/theoradsp.h
+index 5e744c9..412c4ce 100644
+--- a/lib/theoradsp.h
++++ b/lib/theoradsp.h
+@@ -12,7 +12,7 @@ struct _TheoraDSPShared {
+   void * control_map;
+ 
+   void * frame_map;
+-  int unused0;
++  int frame_stride;
+   int unused1;
+   int unused2;
+   int unused3;
+-- 
+1.6.4.4
+
