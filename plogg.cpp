@@ -255,7 +255,7 @@ class GL_DisplaySink : public DisplaySink
 {
 public:
   GL_DisplaySink(int glMode) : mDisplay(0), mContext(0), mSurface(0), mMode(glMode), mMappedTexture(0) {
-    assert(mMode >= 0 && mMode <= 4);
+    assert(mMode >= 0 && mMode <= 5);
   }
 
   void Show(th_dec_ctx* dec, th_ycbcr_buffer const& buffer) {
@@ -518,12 +518,27 @@ private:
       "void main()\n"
       "{\n"
       "gl_FragColor = textureStreamIMG(tx, myTexCoord);\n"
+      "}\n",
+
+      // More optimized routine.
+      "precision highp float;\n"
+      "uniform sampler2D ytx, utx, vtx;\n"
+      "uniform mat3 yuv2rgb;\n"
+      "varying vec2 myTexCoord;\n"
+      "void main()\n"
+      "{\n"
+      "vec3 yuv = vec3(texture2D(ytx, myTexCoord).x, texture2D(utx, myTexCoord).x, texture2D(vtx, myTexCoord).x);\n"
+      "yuv -= vec3(0.0, 0.5, 0.5);\n"
+      "gl_FragColor = vec4(yuv2rgb * yuv, 1.0);\n"
       "}\n"
     };
 
     int mode = mMode;
     if (mMode == 4) {
       mode = 3;
+    }
+    if (mMode == 5) {
+      mode = 4;
     }
     mFragmentShader = compile_shader(GL_FRAGMENT_SHADER, fshaders[mode]);
 
@@ -550,7 +565,7 @@ private:
     if (mMode == 3 || mMode == 4) {
       glUniform1i(glGetUniformLocation(mProgram, "tx"), 0);
     } else {
-      if (mMode == 1) {
+      if (mMode == 1 || mMode == 5) {
 	static GLfloat const yuv2rgb[] = {
 	  1.0, 1.0, 1.0,
 	  0.0, -0.34414, 1.772,
@@ -563,7 +578,7 @@ private:
       glGenTextures(1, &mTextures[0]);
       assert(mTextures[0]);
 
-      if (mMode == 0 || mMode == 1) {
+      if (mMode == 0 || mMode == 1 || mMode == 5) {
 	glUniform1i(glGetUniformLocation(mProgram, "utx"), 1);
 	glUniform1i(glGetUniformLocation(mProgram, "vtx"), 2);
 	glGenTextures(2, &mTextures[1]);
@@ -1156,6 +1171,7 @@ void usage() {
   cout << "      2      Use fast (greyscale) fragment shader." << endl;
   cout << "      3      Use texture streaming." << endl;
   cout << "      4      Use texture streaming with DSP swizzling." << endl;
+  cout << "      5      Use fragment shader v3." << endl;
   cout << "  -s       Use SDL render path. (default)" << endl;
   cout << "  -n       Use null render path." << endl;
   exit(1);
@@ -1169,7 +1185,7 @@ int main(int argc, char* argv[]) {
     switch (ch) {
     case 'g': {
       int glMode = atoi(optarg);
-      if (glMode < 0 || glMode > 4) {
+      if (glMode < 0 || glMode > 5) {
 	fprintf(stderr, "%s: invalid gl mode %d\n", argv[0], glMode);
 	usage();
       }
