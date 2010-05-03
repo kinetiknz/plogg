@@ -30,13 +30,15 @@
 #define LINUX 1
 #include "bc_cat.h"
 #include <GLES2/gl2ext.h>
-// CMEM.
-#include "cmem.h"
 
 #define UYVY_CPU_BUF 0
 #define CMEM 0
 #define TEST_GETPHYS 0
 #define SOUND 0
+
+#if CMEM
+#include "cmem.h"
+#endif
 
 PFNGLTEXBINDSTREAMIMGPROC glTexBindStreamIMG;
 PFNGLGETTEXSTREAMDEVICENAMEIMGPROC glGetTexStreamDeviceNameIMG;
